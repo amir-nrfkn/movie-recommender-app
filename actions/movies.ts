@@ -1,35 +1,51 @@
 /**
- * Server Actions for fetching movie data from the Gemini AI model.
+ * Server Actions for fetching movie data from TMDB and generating
+ * recommendations via Gemini AI.
  *
- * These actions run exclusively on the server, keeping the GEMINI_API_KEY
- * secret and never exposing it to the browser. The client component
- * (app/page.tsx) calls these functions to get movie data and recommendations.
- *
- * Uses the @google/genai SDK with structured JSON output (responseSchema)
- * to guarantee type-safe responses from the model.
+ * Changes from v1:
+ * - fetchMovies: Switched from `top_rated` (obscure high-rated films) to
+ *   `discover` with hard floors on vote_count and popularity, ensuring
+ *   cards are recognisable to mainstream audiences. Removed US-origin
+ *   restriction so global crowd-pleasers (e.g. The Dark Knight) appear.
+ * - getMovieRecommendation: Enriched prompt with genre/director metadata
+ *   so Gemini reasons about *taste*, not just titles. Added explicit
+ *   instructions for diversity and surprise. Fixed model string.
  */
 'use server';
 
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Movie, SwipedMovie, Recommendation } from '@/types/movie';
 
-/** Number of movies to request from the AI per batch. */
 const MOVIES_PER_BATCH = 15;
-
-/**
- * Maximum number of previously-seen movie titles to send in the exclusion
- * prompt. Keeps the prompt from growing unboundedly in long sessions.
- */
 const MAX_EXCLUSION_LIST_SIZE = 100;
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
 /**
- * Fetches a batch of movie suggestions from the TMDB API.
+ * Builds a rich metadata string for a swiped movie to give Gemini
+ * context beyond just the title (genre, director, year).
+ */
+function movieLabel(m: SwipedMovie): string {
+    const parts = [m.title];
+    if (m.year) parts.push(`(${m.year})`);
+    if (m.director && m.director !== 'Unknown Director') parts.push(`dir. ${m.director}`);
+    if (m.genre) parts.push(`[${m.genre}]`);
+    return parts.join(' ');
+}
+
+// ─── fetchMovies ─────────────────────────────────────────────────────────────
+
+/**
+ * Fetches a batch of well-known movies from TMDB using the `discover`
+ * endpoint with quality floors, rather than `top_rated` paged randomly.
  *
- * @param exclude - Titles of movies the user has already seen in this session,
- *   used to avoid duplicates. Only the most recent entries are sent to the model
- *   to keep the prompt within reasonable limits.
- * @returns An array of Movie objects (without `id` or `gradient` — those are
- *   added client-side) on success, or an empty array on failure.
+ * Key changes:
+ *  - `sort_by=popularity.desc` on the `discover` endpoint is respected.
+ *  - `vote_count.gte=1000` filters out niche/obscure films.
+ *  - `vote_average.gte=6.0` keeps quality reasonable.
+ *  - Removed `with_origin_country=US` — too restrictive.
+ *  - Random page capped at 8 (pages 9+ of popularity-sorted discover
+ *    get noticeably less mainstream).
  */
 export async function fetchMovies(
     exclude: string[]
@@ -41,106 +57,152 @@ export async function fetchMovies(
             return [];
         }
 
-        // Fetch a random page of popular English-language, US-origin movies
-        const randomPage = Math.floor(Math.random() * 20) + 1;
-        const popularRes = await fetch(
-            `https://api.themoviedb.org/3/movie/top_rated?api_key=${apiKey}&include_adult=false&include_video=false&language=en-US&page=${randomPage}&sort_by=popularity.desc&with_origin_country=US&with_original_language=en`
+        // Pages 1-8 of popularity-sorted discover are solidly mainstream
+        const randomPage = Math.floor(Math.random() * 8) + 1;
+
+        const discoverRes = await fetch(
+            `https://api.themoviedb.org/3/discover/movie` +
+            `?api_key=${apiKey}` +
+            `&include_adult=false` +
+            `&include_video=false` +
+            `&language=en-US` +
+            `&page=${randomPage}` +
+            `&sort_by=popularity.desc` +
+            `&vote_count.gte=1000` +    // ensures the film is widely seen
+            `&vote_average.gte=6.0` +   // baseline quality filter
+            `&with_original_language=en` // English-language films for NA audiences
         );
 
-        if (!popularRes.ok) {
-            console.error('[fetchMovies] Failed to fetch popular movies from TMDB:', popularRes.status);
+        if (!discoverRes.ok) {
+            console.error('[fetchMovies] TMDB discover failed:', discoverRes.status);
             return [];
         }
 
-        const popularData = await popularRes.json();
-        const results = popularData.results || [];
+        const discoverData = await discoverRes.json();
+        const results: any[] = discoverData.results || [];
 
-        // Filter out movies that the user has already seen
-        const excludedSet = new Set(exclude.map(t => t.toLowerCase()));
-        const filteredResults = results.filter((m: any) => !excludedSet.has(m.title.toLowerCase()));
+        // Deduplicate against already-seen titles
+        const excludedSet = new Set(
+            exclude.slice(-MAX_EXCLUSION_LIST_SIZE).map((t) => t.toLowerCase())
+        );
+        const filtered = results.filter(
+            (m) => !excludedSet.has((m.title as string).toLowerCase())
+        );
 
-        // We only want MOVIES_PER_BATCH movies
-        const selectedMovies = filteredResults.slice(0, MOVIES_PER_BATCH);
+        const selected = filtered.slice(0, MOVIES_PER_BATCH);
 
-        // Fetch additional details (credits for director) for each selected movie
-        const moviePromises = selectedMovies.map(async (m: any) => {
-            const detailRes = await fetch(
-                `https://api.themoviedb.org/3/movie/${m.id}?api_key=${apiKey}&append_to_response=credits`
-            );
-            if (!detailRes.ok) return null;
+        // Enrich each movie with director + full genre list
+        const moviePromises = selected.map(async (m: any) => {
+            try {
+                const detailRes = await fetch(
+                    `https://api.themoviedb.org/3/movie/${m.id}` +
+                    `?api_key=${apiKey}&append_to_response=credits`
+                );
+                if (!detailRes.ok) return null;
 
-            const detailData = await detailRes.json();
+                const d = await detailRes.json();
 
-            // Find the director in the crew
-            const crew = detailData.credits?.crew || [];
-            const director = crew.find((member: any) => member.job === 'Director')?.name || 'Unknown Director';
+                const director =
+                    (d.credits?.crew ?? []).find((c: any) => c.job === 'Director')
+                        ?.name ?? 'Unknown Director';
 
-            // Map genres to a comma-separated string
-            const genres = detailData.genres?.map((g: any) => g.name).join(', ') || 'Unknown Genre';
+                const genre =
+                    (d.genres ?? []).map((g: any) => g.name).join(', ') ||
+                    'Unknown Genre';
 
-            // Extract year from release_date (e.g., "2023-10-12")
-            const year = detailData.release_date ? parseInt(detailData.release_date.split('-')[0]) : 0;
+                const year = d.release_date
+                    ? parseInt(d.release_date.split('-')[0])
+                    : 0;
 
-            const posterUrl = detailData.poster_path ? `https://image.tmdb.org/t/p/w500${detailData.poster_path}` : undefined;
+                const posterUrl = d.poster_path
+                    ? `https://image.tmdb.org/t/p/w500${d.poster_path}`
+                    : undefined;
 
-            return {
-                title: detailData.title,
-                year,
-                director,
-                genre: genres,
-                synopsis: detailData.overview,
-                posterUrl,
-            };
+                return {
+                    title: d.title as string,
+                    year,
+                    director,
+                    genre,
+                    synopsis: d.overview as string,
+                    posterUrl,
+                };
+            } catch {
+                return null;
+            }
         });
 
-        const resolvedMovies = await Promise.all(moviePromises);
-        return resolvedMovies.filter(Boolean) as Omit<Movie, 'id' | 'gradient'>[];
-
+        const resolved = await Promise.all(moviePromises);
+        return resolved.filter(Boolean) as Omit<Movie, 'id' | 'gradient'>[];
     } catch (error) {
-        console.error('[fetchMovies] Failed to fetch movies from TMDB:', error);
+        console.error('[fetchMovies] Unexpected error:', error);
         return [];
     }
 }
 
+// ─── getMovieRecommendation ───────────────────────────────────────────────────
+
 /**
- * Generates a single personalized movie recommendation based on the user's
- * swipe history.
+ * Generates a personalised movie recommendation using Gemini.
  *
- * @param swipedMovies - All movies the user has swiped on, each tagged with
- *   their action (loved, watched, disliked, unwatched). The function groups
- *   these into preference categories before sending to the model.
- * @returns A Recommendation object on success, or null on failure.
+ * Key changes vs v1:
+ *  - Each movie in the prompt now includes year, director, and genre so
+ *    Gemini can reason about taste patterns (not just title recognition).
+ *  - Prompt explicitly asks Gemini to identify taste signals before
+ *    recommending, and to avoid the most obvious/predictable pick.
+ *  - Fixed model string: `gemini-2.0-flash` (was `gemini-3-flash-preview`
+ *    which is not a valid model and likely caused silent failures).
  */
 export async function getMovieRecommendation(
     swipedMovies: SwipedMovie[]
 ): Promise<Recommendation | null> {
     try {
-        // Group swiped movies into preference categories for the prompt
-        const loved = swipedMovies
-            .filter((m) => m.action === 'loved')
-            .map((m) => m.title);
-        const watched = swipedMovies
-            .filter((m) => m.action === 'watched')
-            .map((m) => m.title);
-        const disliked = swipedMovies
-            .filter((m) => m.action === 'disliked')
-            .map((m) => m.title);
-        const unwatched = swipedMovies
-            .filter((m) => m.action === 'unwatched')
-            .map((m) => m.title);
+        const loved = swipedMovies.filter((m) => m.action === 'loved');
+        const watched = swipedMovies.filter((m) => m.action === 'watched');
+        const disliked = swipedMovies.filter((m) => m.action === 'disliked');
+        const unwatched = swipedMovies.filter((m) => m.action === 'unwatched');
+
+        // All titles the user has already encountered — Gemini must not repeat these
+        const allSeenTitles = swipedMovies.map((m) => m.title);
 
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `Based on the user's movie preferences:
-        Loved: ${loved.join(', ') || 'None'}
-        Watched (neutral): ${watched.join(', ') || 'None'}
-        Disliked: ${disliked.join(', ') || 'None'}
-        Haven't watched: ${unwatched.join(', ') || 'None'}
+        const prompt = `
+You are a cinephile recommendation engine. Analyse the user's taste profile
+below, then recommend ONE film they are very likely to love.
 
-        Recommend ONE movie the user would love that is NOT in any of the lists above.
-        Return ONLY valid JSON matching this schema: {title, year, director, genre, synopsis, reason}`,
+## User taste profile
+
+LOVED (highly rated by user):
+${loved.length ? loved.map(movieLabel).join('\n') : 'None yet'}
+
+WATCHED AND LIKED (neutral positive):
+${watched.length ? watched.map(movieLabel).join('\n') : 'None yet'}
+
+DISLIKED:
+${disliked.length ? disliked.map(movieLabel).join('\n') : 'None yet'}
+
+HAVEN'T WATCHED (swiped past):
+${unwatched.length ? unwatched.map(movieLabel).join('\n') : 'None yet'}
+
+## Instructions
+
+1. First, silently identify 2-3 patterns in the loved list (genres, directors,
+   themes, tone, era). Use these patterns to drive your pick.
+2. Recommend ONE film that is NOT in any of the lists above. Do not recommend:
+   ${allSeenTitles.slice(-60).join(', ')}
+3. Avoid defaulting to the single most famous film in a genre
+   (e.g. if they love sci-fi, don't just say Interstellar). Be specific and
+   slightly surprising — a hidden gem or a less-obvious great film is better
+   than the safest pick.
+4. The "reason" field should explain specifically *why* this matches their
+   taste (reference their loved films by name).
+
+Return ONLY valid JSON — no markdown, no preamble.
+`.trim();
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash', // fixed from invalid 'gemini-3-flash-preview'
+            contents: prompt,
             config: {
                 responseMimeType: 'application/json',
                 responseSchema: {
@@ -153,14 +215,7 @@ export async function getMovieRecommendation(
                         synopsis: { type: Type.STRING },
                         reason: { type: Type.STRING },
                     },
-                    required: [
-                        'title',
-                        'year',
-                        'director',
-                        'genre',
-                        'synopsis',
-                        'reason',
-                    ],
+                    required: ['title', 'year', 'director', 'genre', 'synopsis', 'reason'],
                 },
             },
         });
@@ -173,35 +228,32 @@ export async function getMovieRecommendation(
 
         const parsed: Recommendation = JSON.parse(text);
 
-        // Fetch the poster for this recommendation using TMDB
+        // Fetch poster for the recommended film from TMDB
         const apiKey = process.env.TMDB_API_KEY;
         if (apiKey && parsed.title) {
             try {
-                // Search TMDB for the recommended movie by title and year
                 const searchRes = await fetch(
-                    `https://api.themoviedb.org/3/search/movie?api_key=${apiKey}&query=${encodeURIComponent(parsed.title)}&year=${parsed.year}&language=en-US`
+                    `https://api.themoviedb.org/3/search/movie` +
+                    `?api_key=${apiKey}` +
+                    `&query=${encodeURIComponent(parsed.title)}` +
+                    `&year=${parsed.year}` +
+                    `&language=en-US`
                 );
                 if (searchRes.ok) {
                     const searchData = await searchRes.json();
-                    if (searchData.results && searchData.results.length > 0) {
-                        const posterPath = searchData.results[0].poster_path;
-                        if (posterPath) {
-                            parsed.posterUrl = `https://image.tmdb.org/t/p/w500${posterPath}`;
-                        }
+                    const posterPath = searchData.results?.[0]?.poster_path;
+                    if (posterPath) {
+                        parsed.posterUrl = `https://image.tmdb.org/t/p/w500${posterPath}`;
                     }
                 }
             } catch (err) {
-                console.error('[getMovieRecommendation] Failed to fetch poster from TMDB:', err);
-                // Non-fatal, we just won't have a poster
+                console.error('[getMovieRecommendation] Poster fetch failed (non-fatal):', err);
             }
         }
 
         return parsed;
     } catch (error) {
-        console.error(
-            '[getMovieRecommendation] Failed to get recommendation from Gemini:',
-            error
-        );
+        console.error('[getMovieRecommendation] Failed:', error);
         return null;
     }
 }

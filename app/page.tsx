@@ -14,12 +14,46 @@ import { fetchMovies, getMovieRecommendation } from '@/actions/movies';
 import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 
 const LOADING_MESSAGES = [
+  // The Classics
   "Popping the popcorn...",
   "Waking up the projectionist...",
   "Splicing film reels...",
   "Dimming the lights...",
   "Finding the perfect seat...",
   "Rolling the credits...",
+
+  // The Theater Experience
+  "Shushing the people in the back row...",
+  "Sweeping up the virtual spilled popcorn...",
+  "Silencing all cell phones...",
+  "Checking the floor for sticky spots...",
+  "Buying a $14 small soda...",
+  "Scrolling past the 20 minutes of trailers...",
+
+  // The Production Room
+  "Developing the negatives...",
+  "Color grading the highlights...",
+  "Syncing the foley tracks...",
+  "Waiting for the Director’s Cut...",
+  "Rendering the CGI explosions...",
+  "Casting the lead roles...",
+
+  // The Cinephile
+  "Consulting the Rotten Tomatoes...",
+  "Polishing the Academy Awards...",
+  "Bribing the critics for a 5-star review...",
+  "Analyzing your cinematic DNA...",
+  "Debating the ending of Inception...",
+  "Practicing our Oscar acceptance speech...",
+
+  // The Genre Beats
+  "Cueing the jump scare...",
+  "Fueling up the getaway car...",
+  "Enhancing the security footage...",
+  "Loading the dramatic plot twist...",
+  "Training the montage sequence...",
+  "Locking the basement door...",
+  "Waiting for the rain to start for the big kiss..."
 ];
 
 function getRandomGradient() {
@@ -114,8 +148,8 @@ function SwipeCard({ movie, onSwipe, isTop, index }: { movie: Movie, onSwipe: (a
     >
       {/* Movie Poster Background */}
       {movie.posterUrl && (
-        <img 
-          src={movie.posterUrl} 
+        <img
+          src={movie.posterUrl}
           alt={`${movie.title} poster`}
           className="absolute inset-0 w-full h-full object-cover z-0"
           draggable={false}
@@ -228,9 +262,15 @@ export default function SceneIt() {
   const getRecommendation = async (forceSwipedMovies?: SwipedMovie[]): Promise<void> => {
     const payload = forceSwipedMovies || swipedMovies;
     setIsRecommending(true);
-    setLoadingMessageIndex(0);
+    setLoadingMessageIndex(Math.floor(Math.random() * LOADING_MESSAGES.length));
     const interval = setInterval(() => {
-      setLoadingMessageIndex((prev) => (prev + 1) % LOADING_MESSAGES.length);
+      setLoadingMessageIndex((prev) => {
+        let next = Math.floor(Math.random() * LOADING_MESSAGES.length);
+        while (next === prev) {
+          next = Math.floor(Math.random() * LOADING_MESSAGES.length);
+        }
+        return next;
+      });
     }, 2000);
     try {
       const result = await getMovieRecommendation(payload);
@@ -245,9 +285,9 @@ export default function SceneIt() {
     }
   };
 
-  const handleAlreadySeen = async (): Promise<void> => {
+  const handleAlreadySeen = async (action: SwipeAction): Promise<void> => {
     if (!recommendation) return;
-    
+
     // Convert recommendation to a generic movie payload to feed into swiped list
     const fakeMovie: Movie = {
       id: crypto.randomUUID(),
@@ -258,8 +298,8 @@ export default function SceneIt() {
       synopsis: recommendation.synopsis,
       gradient: getRandomGradient(),
     };
-    
-    const newSwipedMovies = [...swipedMovies, { ...fakeMovie, action: 'watched' as SwipeAction }];
+
+    const newSwipedMovies = [...swipedMovies, { ...fakeMovie, action }];
     setSwipedMovies(newSwipedMovies);
     setRecommendation(null);
     getRecommendation(newSwipedMovies);
@@ -308,80 +348,109 @@ export default function SceneIt() {
 
   if (recommendation && !isRecommending) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] text-white p-6 flex flex-col items-center justify-center relative overflow-hidden">
+      <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col font-sans overflow-hidden">
         {/* Full screen blurred background if poster exists */}
         {recommendation.posterUrl && (
-          <div 
-            className="absolute inset-0 z-0 opacity-20 bg-cover bg-center blur-xl scale-110"
+          <div
+            className="absolute inset-0 z-0 opacity-20 bg-cover bg-center blur-xl scale-110 pointer-events-none"
             style={{ backgroundImage: `url(${recommendation.posterUrl})` }}
           />
         )}
-        
-        <motion.div
-          initial={{ opacity: 0, y: 50 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-sm border border-white/10 rounded-3xl overflow-hidden relative z-10 flex flex-col max-h-[85vh] shadow-[0_0_40px_rgba(0,0,0,0.8)]"
-        >
-          <div className="relative pt-[120%] flex-shrink-0 bg-white/5">
-            {recommendation.posterUrl ? (
-              <img 
-                src={recommendation.posterUrl} 
-                alt={recommendation.title}
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Film size={48} className="text-white/20" />
-              </div>
-            )}
-            
-            {/* Gradient to smooth transition to text area */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/70 to-transparent" />
-            
-            <div className="absolute bottom-0 left-0 right-0 p-6 pb-2 text-center pointer-events-none">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full bg-pink-500/20 text-pink-500 mb-3 mx-auto backdrop-blur-sm">
-                <Sparkles size={20} />
-              </div>
-              <h2 className="text-3xl font-serif font-bold mb-1 leading-tight drop-shadow-md">{recommendation.title}</h2>
-              <div className="flex items-center justify-center gap-3 text-white/70 text-sm font-mono drop-shadow-md">
-                <span>{recommendation.year}</span>
-                <span>•</span>
-                <span>{recommendation.genre}</span>
-              </div>
-            </div>
-          </div>
 
-          {/* Scrollable text content */}
-          <div className="flex-1 overflow-y-auto p-6 bg-[#0a0a0a] space-y-6 scrollbar-hide">
-            <div>
-              <h3 className="text-[10px] font-bold tracking-widest text-white/40 uppercase mb-2">Synopsis</h3>
-              <p className="text-white/80 leading-relaxed text-sm">{recommendation.synopsis}</p>
-            </div>
-            <div>
-              <h3 className="text-[10px] font-bold tracking-widest text-pink-400/60 uppercase mb-2">Why you'll love it</h3>
-              <p className="text-pink-100/90 leading-relaxed text-sm italic">{recommendation.reason}</p>
-            </div>
-            <div className="pt-2 border-t border-white/10">
-              <p className="text-white/40 text-[10px] uppercase tracking-widest font-mono text-center">Dir. {recommendation.director}</p>
-            </div>
-          </div>
+        <header className="p-6 flex items-center justify-between z-10">
+          <h1 className="text-2xl font-serif font-bold tracking-tight">SceneIt</h1>
+        </header>
 
-          {/* Buttons pinned to bottom */}
-          <div className="p-4 bg-[#0a0a0a] border-t border-white/5 flex gap-3">
-            <button
-              onClick={handleAlreadySeen}
-              className="flex-1 py-3 rounded-xl bg-white/10 text-white font-bold tracking-wide hover:bg-white/20 transition-colors text-xs uppercase"
-            >
-              Already Seen
-            </button>
+        <main className="flex-1 relative flex flex-col items-center justify-center p-6 pt-0 z-10">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-sm aspect-[2/3] border border-white/10 rounded-3xl overflow-hidden relative flex flex-col shadow-[0_0_40px_rgba(0,0,0,0.8)]"
+          >
+            {/* Fixed Poster Background */}
+            <div className="absolute inset-0 z-0 bg-white/5">
+              {recommendation.posterUrl ? (
+                <img
+                  src={recommendation.posterUrl}
+                  alt={recommendation.title}
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Film size={48} className="text-white/20" />
+                </div>
+              )}
+              {/* Fixed Gradient to ensure the bottom text is always readable initially */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent pointer-events-none" />
+            </div>
+
+            {/* Scrollable Area */}
+            <div className="absolute inset-0 overflow-y-auto scrollbar-hide z-10">
+              {/* First part matching swipe card */}
+              <div className="h-full flex flex-col justify-end p-8 pb-6 relative z-20 pointer-events-none">
+                <div className="pointer-events-auto">
+                  <h2 className="text-4xl font-bold text-white mb-2 font-serif leading-tight">{recommendation.title}</h2>
+                  <div className="flex items-center gap-3 text-white/80 text-sm mb-4 font-mono">
+                    <span className="px-2 py-1 rounded bg-white/20 backdrop-blur-sm">{recommendation.year}</span>
+                    <span>•</span>
+                    <span>{recommendation.genre}</span>
+                  </div>
+                  <p className="text-white/90 text-sm leading-relaxed drop-shadow-md">
+                    {recommendation.synopsis}
+                  </p>
+                </div>
+              </div>
+
+              {/* "Rest of the text" with black background fading at the top */}
+              <div className="bg-[#0a0a0a] p-8 pt-6 relative z-10">
+                {/* Fade at the top behind the first part */}
+                <div className="absolute bottom-full left-0 right-0 h-72 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/80 to-transparent pointer-events-none" />
+
+                <h3 className="text-[10px] font-bold tracking-widest text-pink-400/60 uppercase mb-2">Why you'll love it</h3>
+                <p className="text-pink-100/90 leading-relaxed text-sm italic mb-6">
+                  {recommendation.reason}
+                </p>
+
+                <div className="pt-4 border-t border-white/10 pb-2">
+                  <p className="text-white/40 text-[10px] uppercase tracking-widest font-mono">Dir. {recommendation.director}</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Controls below the card */}
+          <div className="mt-8 flex flex-col items-center w-full max-w-sm gap-4 z-10">
+            <div className="text-center text-xs text-white/60 font-mono">
+              Already seen? Get another recommendation
+            </div>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => handleAlreadySeen('disliked')}
+                className="w-14 h-14 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-500/20 transition-colors border border-green-500/30"
+              >
+                <ThumbsDown size={24} />
+              </button>
+              <button
+                onClick={() => handleAlreadySeen('loved')}
+                className="w-14 h-14 rounded-full bg-pink-500/10 text-pink-500 flex items-center justify-center hover:bg-pink-500/20 transition-colors border border-pink-500/30"
+              >
+                <Heart size={24} />
+              </button>
+              <button
+                onClick={() => handleAlreadySeen('watched')}
+                className="w-14 h-14 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-500/20 transition-colors border border-green-500/30"
+              >
+                <Eye size={24} />
+              </button>
+            </div>
             <button
               onClick={() => setRecommendation(null)}
-              className="flex-1 py-3 rounded-xl bg-white text-black font-bold tracking-wide hover:bg-white/90 transition-colors text-xs uppercase"
+              className="w-full py-4 mt-2 rounded-2xl bg-white text-black font-bold tracking-wide hover:bg-white/90 transition-colors text-sm uppercase"
             >
               Keep Swiping
             </button>
           </div>
-        </motion.div>
+        </main>
       </div>
     );
   }
