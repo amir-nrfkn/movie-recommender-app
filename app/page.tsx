@@ -1,5 +1,5 @@
 /**
- * SceneIt — Main swipe interface page.
+ * Filmmoo — Main swipe interface page.
  *
  * This is a Client Component because it handles interactive gestures (drag/swipe),
  * animation state, and user input. All AI calls are delegated to Server Actions
@@ -9,7 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, useMotionValue, useTransform, useAnimation, useMotionValueEvent, AnimatePresence } from 'motion/react';
-import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film } from 'lucide-react';
+import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film, RotateCcw } from 'lucide-react';
 import { fetchMovies, getMovieRecommendation } from '@/actions/movies';
 import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 
@@ -74,7 +74,7 @@ function getRandomGradient() {
   return `linear-gradient(to bottom right, ${selected[0]}, ${selected[1]}, ${selected[2]})`;
 }
 
-function SwipeCard({ movie, onSwipe, isTop, index }: { movie: Movie, onSwipe: (action: SwipeAction, movie: Movie) => void, isTop: boolean, index: number }) {
+function SwipeCard({ movie, onSwipe, isTop, index, onUndo, canUndo }: { movie: Movie, onSwipe: (action: SwipeAction, movie: Movie) => void, isTop: boolean, index: number, onUndo: () => void, canUndo: boolean }) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const rotate = useTransform(x, [-200, 200], [-10, 10]);
@@ -130,7 +130,7 @@ function SwipeCard({ movie, onSwipe, isTop, index }: { movie: Movie, onSwipe: (a
 
   return (
     <motion.div
-      className="absolute w-full h-full rounded-3xl shadow-2xl overflow-hidden flex flex-col cursor-grab active:cursor-grabbing border border-white/10 origin-bottom"
+      className="absolute w-full h-full rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/10 origin-bottom"
       style={{
         background: movie.gradient,
         x,
@@ -146,6 +146,21 @@ function SwipeCard({ movie, onSwipe, isTop, index }: { movie: Movie, onSwipe: (a
       animate={controls}
       exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.2 } }}
     >
+      {/* Draggable hit area covering the entire card */}
+      <div className="absolute inset-0 cursor-grab active:cursor-grabbing z-10" />
+
+      {/* Undo Button */}
+      {isTop && canUndo && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onUndo();
+          }}
+          className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/40 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/60 transition-colors z-50 border border-white/20"
+        >
+          <RotateCcw size={18} />
+        </button>
+      )}
       {/* Movie Poster Background */}
       {movie.posterUrl && (
         <img
@@ -209,7 +224,7 @@ function Controls({ onAction }: { onAction: (action: SwipeAction) => void }) {
   );
 }
 
-export default function SceneIt() {
+export default function Filmmoo() {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [swipedMovies, setSwipedMovies] = useState<SwipedMovie[]>([]);
@@ -229,12 +244,12 @@ export default function SceneIt() {
       const rawMovies = await fetchMovies(exclude);
       const newMovies: Movie[] = rawMovies.map((m) => ({
         ...m,
-        id: crypto.randomUUID(),
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
         gradient: getRandomGradient(),
       }));
       setMovies((prev) => [...prev, ...newMovies]);
     } catch (error) {
-      console.error('[SceneIt] Failed to fetch movies:', error);
+      console.error('[Filmmoo] Failed to fetch movies:', error);
     } finally {
       setIsFetching(false);
     }
@@ -253,6 +268,13 @@ export default function SceneIt() {
   const handleSwipe = (action: SwipeAction, movie: Movie) => {
     setSwipedMovies(prev => [...prev, { ...movie, action }]);
     setCurrentIndex(prev => prev + 1);
+  };
+
+  const handleUndo = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex(prev => prev - 1);
+      setSwipedMovies(prev => prev.slice(0, -1));
+    }
   };
 
   /**
@@ -278,7 +300,7 @@ export default function SceneIt() {
         setRecommendation(result);
       }
     } catch (error) {
-      console.error('[SceneIt] Failed to get recommendation:', error);
+      console.error('[Filmmoo] Failed to get recommendation:', error);
     } finally {
       clearInterval(interval);
       setIsRecommending(false);
@@ -290,7 +312,7 @@ export default function SceneIt() {
 
     // Convert recommendation to a generic movie payload to feed into swiped list
     const fakeMovie: Movie = {
-      id: crypto.randomUUID(),
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
       title: recommendation.title,
       year: recommendation.year,
       director: recommendation.director,
@@ -358,7 +380,7 @@ export default function SceneIt() {
         )}
 
         <header className="p-6 flex items-center justify-between z-10">
-          <h1 className="text-2xl font-serif font-bold tracking-tight">SceneIt</h1>
+          <h1 className="text-2xl font-serif font-bold tracking-tight">Filmmoo</h1>
         </header>
 
         <main className="flex-1 relative flex flex-col items-center justify-center p-6 pt-0 z-10">
@@ -461,7 +483,7 @@ export default function SceneIt() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col overflow-hidden font-sans">
       <header className="p-6 flex items-center justify-between z-10">
-        <h1 className="text-2xl font-serif font-bold tracking-tight">SceneIt</h1>
+        <h1 className="text-2xl font-serif font-bold tracking-tight">Filmmoo</h1>
         <button
           onClick={() => getRecommendation()}
           disabled={isRecommending || swipedMovies.length === 0}
@@ -491,6 +513,8 @@ export default function SceneIt() {
                     index={index}
                     isTop={isTop}
                     onSwipe={handleSwipe}
+                    onUndo={handleUndo}
+                    canUndo={currentIndex > 0}
                   />
                 );
               })}
@@ -498,11 +522,13 @@ export default function SceneIt() {
           )}
         </div>
 
-        <Controls onAction={(action) => {
-          if (visibleMovies.length > 0) {
-            handleSwipe(action, visibleMovies[0]);
-          }
-        }} />
+        <Controls 
+          onAction={(action) => {
+            if (visibleMovies.length > 0) {
+              handleSwipe(action, visibleMovies[0]);
+            }
+          }} 
+        />
       </main>
 
       <div className="p-6 text-center text-white/30 text-xs font-mono z-10 flex flex-col gap-2">

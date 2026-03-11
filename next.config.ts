@@ -1,5 +1,5 @@
 /**
- * Next.js configuration for SceneIt.
+ * Next.js configuration for Filmmoo.
  *
  * Key decisions:
  * - output: 'standalone' for containerized deployments (AI Studio / Cloud Run)

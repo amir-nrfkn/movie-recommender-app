@@ -1,5 +1,5 @@
 /**
- * Shared type definitions for movie data used across the SceneIt app.
+ * Shared type definitions for movie data used across the Filmmoo app.
  *
  * These types are used by both the client-side swipe UI (app/page.tsx)
  * and the server-side AI calls (actions/movies.ts). Keeping them in a

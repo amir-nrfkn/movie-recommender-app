@@ -1,6 +1,6 @@
-# SceneIt
+# Filmmoo
 
-SceneIt is a frictionless, Tinder-style movie recommendation app. Users swipe on movie posters to indicate their watch history and preferences. Based on these interactions, the app uses AI to generate highly personalized movie recommendations. No account creation is required to get a recommendation, allowing users to jump straight into the experience.
+Filmmoo is a frictionless, Tinder-style movie recommendation app. Users swipe on movie posters to indicate their watch history and preferences. Based on these interactions, the app uses AI to generate highly personalized movie recommendations. No account creation is required to get a recommendation, allowing users to jump straight into the experience.
 
 ## 🌟 Features
 

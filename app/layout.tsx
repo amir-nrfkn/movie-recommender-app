@@ -7,8 +7,8 @@ const playfair = Playfair_Display({ subsets: ['latin'], variable: '--font-serif'
 const jetbrains = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
-  title: 'SceneIt',
-  description: 'Swipe to find your next favorite movie.',
+  title: 'Filmmoo',
+  description: 'AI-powered movie recommendations based on your swipe history.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
