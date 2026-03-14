@@ -53,7 +53,14 @@ const LOADING_MESSAGES = [
   "Loading the dramatic plot twist...",
   "Training the montage sequence...",
   "Locking the basement door...",
-  "Waiting for the rain to start for the big kiss..."
+  "Waiting for the rain to start for the big kiss...",
+  "Coming up with cheesy dialogue...",
+  "Doing reshoots...",
+  "Editing the trailer...",
+  "Adding the final credits...",
+  "Adding post credit scenes...",
+  "Deciding when to launch on streaming...",
+  "Spending too much on marketting..."
 ];
 
 function getRandomGradient() {
@@ -69,6 +76,7 @@ function getRandomGradient() {
     ['#333333', '#dd1818'],
     ['#0f0c29', '#302b63', '#24243e'],
   ];
+
   const selected = colors[Math.floor(Math.random() * colors.length)];
   if (selected.length === 2) return `linear-gradient(to bottom right, ${selected[0]}, ${selected[1]})`;
   return `linear-gradient(to bottom right, ${selected[0]}, ${selected[1]}, ${selected[2]})`;
@@ -522,12 +530,12 @@ export default function Filmmoo() {
           )}
         </div>
 
-        <Controls 
+        <Controls
           onAction={(action) => {
             if (visibleMovies.length > 0) {
               handleSwipe(action, visibleMovies[0]);
             }
-          }} 
+          }}
         />
       </main>
 
