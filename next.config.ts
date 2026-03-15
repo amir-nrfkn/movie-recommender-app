@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  // Allow access to remote image placeholder.
+  // Allow access to remote images (placeholders and TMDB movie posters).
   images: {
     remotePatterns: [
       {
@@ -22,6 +22,12 @@ const nextConfig: NextConfig = {
         hostname: 'picsum.photos',
         port: '',
         pathname: '/**', // This allows any path under the hostname
+      },
+      {
+        protocol: 'https',
+        hostname: 'image.tmdb.org',
+        port: '',
+        pathname: '/t/p/**', // TMDB poster paths follow /t/p/{size}/{hash}
       },
     ],
   },

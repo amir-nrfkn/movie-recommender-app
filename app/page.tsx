@@ -7,11 +7,41 @@
  */
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import { motion, useMotionValue, useTransform, useAnimation, useMotionValueEvent, AnimatePresence } from 'motion/react';
 import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film, RotateCcw } from 'lucide-react';
 import { fetchMovies, getMovieRecommendation } from '@/actions/movies';
 import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
+
+/**
+ * Validates that a poster URL is a trusted TMDB origin.
+ * Used to prevent arbitrary URL injection in <Image> src and CSS backgroundImage.
+ */
+function isTrustedPosterUrl(url: string | undefined): url is string {
+  return typeof url === 'string' && url.startsWith('https://image.tmdb.org/');
+}
+
+/**
+ * Animated toast banner for displaying transient error messages.
+ * Slides in from the top and auto-dismisses (controlled by the parent).
+ */
+function ErrorBanner({ message }: { message: string | null }) {
+  return (
+    <AnimatePresence>
+      {message && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl bg-red-500/90 backdrop-blur-md text-white text-sm font-medium shadow-lg border border-red-400/30 max-w-sm text-center"
+        >
+          {message}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
 
 const LOADING_MESSAGES = [
   // The Classics
@@ -83,6 +113,7 @@ function getRandomGradient() {
 }
 
 function SwipeCard({ movie, onSwipe, isTop, index, onUndo, canUndo }: { movie: Movie, onSwipe: (action: SwipeAction, movie: Movie) => void, isTop: boolean, index: number, onUndo: () => void, canUndo: boolean }) {
+  const [posterError, setPosterError] = useState(false);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const rotate = useTransform(x, [-200, 200], [-10, 10]);
@@ -169,13 +200,17 @@ function SwipeCard({ movie, onSwipe, isTop, index, onUndo, canUndo }: { movie: M
           <RotateCcw size={18} />
         </button>
       )}
-      {/* Movie Poster Background */}
-      {movie.posterUrl && (
-        <img
+      {/* Movie Poster Background — uses Next.js Image for security and optimisation */}
+      {isTrustedPosterUrl(movie.posterUrl) && !posterError && (
+        <Image
           src={movie.posterUrl}
           alt={`${movie.title} poster`}
-          className="absolute inset-0 w-full h-full object-cover z-0"
+          fill
+          className="object-cover z-0"
           draggable={false}
+          sizes="(max-width: 640px) 100vw, 400px"
+          onError={() => setPosterError(true)}
+          priority={isTop}
         />
       )}
 
@@ -240,13 +275,27 @@ export default function Filmmoo() {
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [isRecommending, setIsRecommending] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  /**
+   * Shows a temporary error banner that auto-dismisses after 5 seconds.
+   * Used to surface rate-limit errors and fetch failures to the user.
+   */
+  const showError = useCallback((message: string) => {
+    setErrorMessage(message);
+    setTimeout(() => setErrorMessage(null), 5000);
+  }, []);
 
   /**
    * Fetches a new batch of movies via the Server Action and adds them
    * to the local stack. Each movie gets a client-side ID and gradient
    * since those are purely presentational.
+   *
+   * Wrapped in useCallback with an empty dep array because it only uses
+   * the functional form of setMovies/setIsFetching and receives `exclude`
+   * as a parameter — no component state is closed over.
    */
-  const fetchMoreMovies = async (exclude: string[]): Promise<void> => {
+  const fetchMoreMovies = useCallback(async (exclude: string[]): Promise<void> => {
     setIsFetching(true);
     try {
       const rawMovies = await fetchMovies(exclude);
@@ -257,21 +306,23 @@ export default function Filmmoo() {
       }));
       setMovies((prev) => [...prev, ...newMovies]);
     } catch (error) {
-      console.error('[Filmmoo] Failed to fetch movies:', error);
+      // Surface rate-limit or fetch errors to the user
+      const message = error instanceof Error ? error.message : 'Failed to load movies. Please try again.';
+      showError(message);
     } finally {
       setIsFetching(false);
     }
-  };
+  }, [showError]);
 
   useEffect(() => {
     fetchMoreMovies([]);
-  }, []);
+  }, [fetchMoreMovies]);
 
   useEffect(() => {
     if (movies.length > 0 && currentIndex >= movies.length - 5 && !isFetching) {
       fetchMoreMovies(movies.map(m => m.title));
     }
-  }, [currentIndex, movies.length, isFetching]);
+  }, [currentIndex, movies.length, isFetching, fetchMoreMovies]);
 
   const handleSwipe = (action: SwipeAction, movie: Movie) => {
     setSwipedMovies(prev => [...prev, { ...movie, action }]);
@@ -291,6 +342,12 @@ export default function Filmmoo() {
    */
   const getRecommendation = async (forceSwipedMovies?: SwipedMovie[]): Promise<void> => {
     const payload = forceSwipedMovies || swipedMovies;
+
+    if (payload.length > 0 && !payload.some(m => m.action !== 'unwatched')) {
+      showError("Please rate at least one movie (Watched, Loved, or Disliked) to get a recommendation.");
+      return;
+    }
+
     setIsRecommending(true);
     setLoadingMessageIndex(Math.floor(Math.random() * LOADING_MESSAGES.length));
     const interval = setInterval(() => {
@@ -308,7 +365,9 @@ export default function Filmmoo() {
         setRecommendation(result);
       }
     } catch (error) {
-      console.error('[Filmmoo] Failed to get recommendation:', error);
+      // Surface rate-limit or recommendation errors to the user
+      const message = error instanceof Error ? error.message : 'Failed to get recommendation. Please try again.';
+      showError(message);
     } finally {
       clearInterval(interval);
       setIsRecommending(false);
@@ -338,6 +397,8 @@ export default function Filmmoo() {
   if (isRecommending && !recommendation) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white p-6 flex flex-col items-center justify-center">
+        {/* Error toast banner */}
+        <ErrorBanner message={errorMessage} />
         <motion.div
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -379,8 +440,10 @@ export default function Filmmoo() {
   if (recommendation && !isRecommending) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col font-sans overflow-hidden">
-        {/* Full screen blurred background if poster exists */}
-        {recommendation.posterUrl && (
+        {/* Error toast banner */}
+        <ErrorBanner message={errorMessage} />
+        {/* Full screen blurred background — only applied for trusted TMDB URLs */}
+        {isTrustedPosterUrl(recommendation.posterUrl) && (
           <div
             className="absolute inset-0 z-0 opacity-20 bg-cover bg-center blur-xl scale-110 pointer-events-none"
             style={{ backgroundImage: `url(${recommendation.posterUrl})` }}
@@ -397,13 +460,16 @@ export default function Filmmoo() {
             animate={{ opacity: 1, scale: 1 }}
             className="w-full max-w-sm aspect-[2/3] border border-white/10 rounded-3xl overflow-hidden relative flex flex-col shadow-[0_0_40px_rgba(0,0,0,0.8)]"
           >
-            {/* Fixed Poster Background */}
+            {/* Fixed Poster Background — uses Next.js Image for security and optimisation */}
             <div className="absolute inset-0 z-0 bg-white/5">
-              {recommendation.posterUrl ? (
-                <img
+              {isTrustedPosterUrl(recommendation.posterUrl) ? (
+                <Image
                   src={recommendation.posterUrl}
-                  alt={recommendation.title}
-                  className="absolute inset-0 w-full h-full object-cover"
+                  alt={`${recommendation.title} poster`}
+                  fill
+                  className="object-cover"
+                  sizes="(max-width: 640px) 100vw, 400px"
+                  priority
                 />
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -490,6 +556,8 @@ export default function Filmmoo() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col overflow-hidden font-sans">
+      {/* Error toast banner */}
+      <ErrorBanner message={errorMessage} />
       <header className="p-6 flex items-center justify-between z-10">
         <h1 className="text-2xl font-serif font-bold tracking-tight">Filmmoo</h1>
         <button

@@ -42,3 +42,35 @@ export type Recommendation = {
     /** Optional TMDB movie poster URL to display on the recommendation card. */
     posterUrl?: string;
 };
+
+// ─── Validation ─────────────────────────────────────────────────────────────
+
+/**
+ * Runtime type guard for the Recommendation type.
+ *
+ * TypeScript types are erased at runtime, so JSON.parse provides no safety.
+ * This function validates that all required fields exist with the correct types
+ * before the data is used by the UI. If it returns false, the caller should
+ * treat the response as malformed and return null.
+ *
+ * @param data - The raw parsed JSON value (unknown at this point).
+ * @returns True if the data satisfies the Recommendation interface.
+ */
+export function isValidRecommendation(data: unknown): data is Recommendation {
+    if (typeof data !== 'object' || data === null) return false;
+
+    const obj = data as Record<string, unknown>;
+
+    // All required fields must be present with the correct type
+    if (typeof obj.title !== 'string') return false;
+    if (typeof obj.year !== 'number') return false;
+    if (typeof obj.director !== 'string') return false;
+    if (typeof obj.genre !== 'string') return false;
+    if (typeof obj.synopsis !== 'string') return false;
+    if (typeof obj.reason !== 'string') return false;
+
+    // posterUrl is optional — must be either undefined or a string
+    if (obj.posterUrl !== undefined && typeof obj.posterUrl !== 'string') return false;
+
+    return true;
+}

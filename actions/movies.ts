@@ -2,19 +2,24 @@
  * Server Actions for fetching movie data from TMDB and generating
  * recommendations via Gemini AI.
  *
- * Changes from v1:
- * - fetchMovies: Switched from `top_rated` (obscure high-rated films) to
- *   `discover` with hard floors on vote_count and popularity, ensuring
- *   cards are recognisable to mainstream audiences. Removed US-origin
- *   restriction so global crowd-pleasers (e.g. The Dark Knight) appear.
- * - getMovieRecommendation: Enriched prompt with genre/director metadata
- *   so Gemini reasons about *taste*, not just titles. Added explicit
- *   instructions for diversity and surprise. Fixed model string.
+ * Security measures applied:
+ * - Rate limiting: Both actions check request rate per IP before proceeding.
+ * - Prompt sanitisation: All client-supplied strings are sanitised before
+ *   interpolation into the Gemini prompt to prevent prompt injection.
+ * - Structured logging: Internal details are only logged verbosely in
+ *   development; production logs use structured error codes only.
+ * - Response validation: AI responses are validated via isValidRecommendation
+ *   type guard before being sent to the client.
  */
 'use server';
 
 import { GoogleGenAI, Type } from '@google/genai';
+import { headers } from 'next/headers';
 import type { Movie, SwipedMovie, Recommendation } from '@/types/movie';
+import { isValidRecommendation } from '@/types/movie';
+import { checkRateLimit } from '@/lib/rate-limit';
+import { sanitiseForPrompt } from '@/lib/sanitise';
+import { logger } from '@/lib/logger';
 
 const MOVIES_PER_BATCH = 15;
 const MAX_EXCLUSION_LIST_SIZE = 100;
@@ -22,14 +27,30 @@ const MAX_EXCLUSION_LIST_SIZE = 100;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
+ * Reads the client IP from Next.js request headers.
+ * Falls back to '127.0.0.1' if no forwarding header is present (local dev).
+ */
+async function getClientIp(): Promise<string> {
+    const headersList = await headers();
+    return (
+        headersList.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+        headersList.get('x-real-ip') ??
+        '127.0.0.1'
+    );
+}
+
+/**
  * Builds a rich metadata string for a swiped movie to give Gemini
  * context beyond just the title (genre, director, year).
+ * All string fields are sanitised to prevent prompt injection.
  */
 function movieLabel(m: SwipedMovie): string {
-    const parts = [m.title];
+    const parts = [sanitiseForPrompt(m.title)];
     if (m.year) parts.push(`(${m.year})`);
-    if (m.director && m.director !== 'Unknown Director') parts.push(`dir. ${m.director}`);
-    if (m.genre) parts.push(`[${m.genre}]`);
+    if (m.director && m.director !== 'Unknown Director') {
+        parts.push(`dir. ${sanitiseForPrompt(m.director)}`);
+    }
+    if (m.genre) parts.push(`[${sanitiseForPrompt(m.genre)}]`);
     return parts.join(' ');
 }
 
@@ -39,21 +60,25 @@ function movieLabel(m: SwipedMovie): string {
  * Fetches a batch of well-known movies from TMDB using the `discover`
  * endpoint with quality floors, rather than `top_rated` paged randomly.
  *
- * Key changes:
- *  - `sort_by=popularity.desc` on the `discover` endpoint is respected.
- *  - `vote_count.gte=1000` filters out niche/obscure films.
- *  - `vote_average.gte=6.0` keeps quality reasonable.
- *  - Removed `with_origin_country=US` — too restrictive.
- *  - Random page capped at 8 (pages 9+ of popularity-sorted discover
- *    get noticeably less mainstream).
+ * Rate limited to 30 requests per 60 seconds per IP.
+ * Throws an error if the rate limit is exceeded so the client can display it.
  */
 export async function fetchMovies(
     exclude: string[]
 ): Promise<Omit<Movie, 'id' | 'gradient'>[]> {
+    // ── Rate limiting ──
+    const ip = await getClientIp();
+    const rateCheck = checkRateLimit(ip, 'fetchMovies');
+    if (!rateCheck.allowed) {
+        throw new Error(
+            `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
+        );
+    }
+
     try {
         const apiKey = process.env.TMDB_API_KEY;
         if (!apiKey) {
-            console.error('[fetchMovies] TMDB_API_KEY is not configured');
+            logger.error('TMDB_KEY_MISSING');
             return [];
         }
 
@@ -74,16 +99,18 @@ export async function fetchMovies(
         );
 
         if (!discoverRes.ok) {
-            console.error('[fetchMovies] TMDB discover failed:', discoverRes.status);
+            logger.error('TMDB_DISCOVER_FAILED', { status: discoverRes.status });
             return [];
         }
 
         const discoverData = await discoverRes.json();
         const results: any[] = discoverData.results || [];
 
-        // Deduplicate against already-seen titles
+        // Sanitise exclude list to prevent downstream misuse, then deduplicate
         const excludedSet = new Set(
-            exclude.slice(-MAX_EXCLUSION_LIST_SIZE).map((t) => t.toLowerCase())
+            exclude
+                .slice(-MAX_EXCLUSION_LIST_SIZE)
+                .map((t) => sanitiseForPrompt(t).toLowerCase())
         );
         const filtered = results.filter(
             (m) => !excludedSet.has((m.title as string).toLowerCase())
@@ -134,7 +161,11 @@ export async function fetchMovies(
         const resolved = await Promise.all(moviePromises);
         return resolved.filter(Boolean) as Omit<Movie, 'id' | 'gradient'>[];
     } catch (error) {
-        console.error('[fetchMovies] Unexpected error:', error);
+        // Re-throw rate limit errors so the client can display them
+        if (error instanceof Error && error.message.includes('Rate limit')) {
+            throw error;
+        }
+        logger.error('FETCH_MOVIES_UNEXPECTED', { error: String(error) });
         return [];
     }
 }
@@ -144,25 +175,30 @@ export async function fetchMovies(
 /**
  * Generates a personalised movie recommendation using Gemini.
  *
- * Key changes vs v1:
- *  - Each movie in the prompt now includes year, director, and genre so
- *    Gemini can reason about taste patterns (not just title recognition).
- *  - Prompt explicitly asks Gemini to identify taste signals before
- *    recommending, and to avoid the most obvious/predictable pick.
- *  - Fixed model string: `gemini-2.0-flash` (was `gemini-3-flash-preview`
- *    which is not a valid model and likely caused silent failures).
+ * Rate limited to 10 requests per 60 seconds per IP.
+ * All client-supplied strings are sanitised before prompt interpolation
+ * to prevent prompt injection attacks.
  */
 export async function getMovieRecommendation(
     swipedMovies: SwipedMovie[]
 ): Promise<Recommendation | null> {
+    // ── Rate limiting ──
+    const ip = await getClientIp();
+    const rateCheck = checkRateLimit(ip, 'getMovieRecommendation');
+    if (!rateCheck.allowed) {
+        throw new Error(
+            `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
+        );
+    }
+
     try {
         const loved = swipedMovies.filter((m) => m.action === 'loved');
         const watched = swipedMovies.filter((m) => m.action === 'watched');
         const disliked = swipedMovies.filter((m) => m.action === 'disliked');
         const unwatched = swipedMovies.filter((m) => m.action === 'unwatched');
 
-        // All titles the user has already encountered — Gemini must not repeat these
-        const allSeenTitles = swipedMovies.map((m) => m.title);
+        // Sanitise all titles before injecting into the prompt
+        const allSeenTitles = swipedMovies.map((m) => sanitiseForPrompt(m.title));
 
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -201,7 +237,7 @@ Return ONLY valid JSON — no markdown, no preamble.
 `.trim();
 
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash', // fixed from invalid 'gemini-3-flash-preview'
+            model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -222,38 +258,53 @@ Return ONLY valid JSON — no markdown, no preamble.
 
         const text = response.text;
         if (!text) {
-            console.error('[getMovieRecommendation] Gemini returned empty response');
+            logger.error('GEMINI_EMPTY_RESPONSE');
             return null;
         }
 
-        const parsed: Recommendation = JSON.parse(text);
+        const parsed: unknown = JSON.parse(text);
+
+        if (!isValidRecommendation(parsed)) {
+            logger.error('GEMINI_INVALID_SHAPE', {
+                // Only log a truncated preview in dev; prod gets just the code
+                preview: String(JSON.stringify(parsed)).slice(0, 200),
+            });
+            return null;
+        }
+
+        // After validation, assign to a mutable typed variable so we can attach the poster
+        const recommendation: Recommendation = { ...parsed };
 
         // Fetch poster for the recommended film from TMDB
         const apiKey = process.env.TMDB_API_KEY;
-        if (apiKey && parsed.title) {
+        if (apiKey && recommendation.title) {
             try {
                 const searchRes = await fetch(
                     `https://api.themoviedb.org/3/search/movie` +
                     `?api_key=${apiKey}` +
-                    `&query=${encodeURIComponent(parsed.title)}` +
-                    `&year=${parsed.year}` +
+                    `&query=${encodeURIComponent(recommendation.title)}` +
+                    `&year=${recommendation.year}` +
                     `&language=en-US`
                 );
                 if (searchRes.ok) {
                     const searchData = await searchRes.json();
                     const posterPath = searchData.results?.[0]?.poster_path;
                     if (posterPath) {
-                        parsed.posterUrl = `https://image.tmdb.org/t/p/w500${posterPath}`;
+                        recommendation.posterUrl = `https://image.tmdb.org/t/p/w500${posterPath}`;
                     }
                 }
             } catch (err) {
-                console.error('[getMovieRecommendation] Poster fetch failed (non-fatal):', err);
+                logger.warn('POSTER_FETCH_FAILED', { error: String(err) });
             }
         }
 
-        return parsed;
+        return recommendation;
     } catch (error) {
-        console.error('[getMovieRecommendation] Failed:', error);
+        // Re-throw rate limit errors so the client can display them
+        if (error instanceof Error && error.message.includes('Rate limit')) {
+            throw error;
+        }
+        logger.error('RECOMMENDATION_FAILED', { error: String(error) });
         return null;
     }
 }
