@@ -37,50 +37,20 @@ const ACTION_LIMITS: Record<string, RateLimitConfig> = {
     getMovieRecommendation: { maxRequests: 10, windowMs: 60_000 },
 };
 
-/** Stores request timestamps per "ip:action" key. */
-const requestMap = new Map<string, number[]>();
+import { createClient } from '@supabase/supabase-js';
+import type { Database } from '@/types/supabase';
 
-/**
- * Interval (ms) between automatic cleanup passes that remove expired entries
- * from the map to prevent unbounded memory growth.
- */
-const CLEANUP_INTERVAL_MS = 120_000;
-
-/** Tracks whether the cleanup timer has been started. */
-let cleanupStarted = false;
-
-/**
- * Removes entries from requestMap whose newest timestamp is older than
- * any action's window. Called periodically to avoid memory leaks.
- */
-function cleanupExpiredEntries(): void {
-    const now = Date.now();
-    // Use the largest window across all actions as the expiry threshold
-    const maxWindow = Math.max(
-        ...Object.values(ACTION_LIMITS).map((c) => c.windowMs)
+// Helper to get an admin client (bypasses RLS)
+function getAdminClient() {
+    const roleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !roleKey) {
+        return null;
+    }
+    return createClient<Database>(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        roleKey,
+        { auth: { persistSession: false } }
     );
-
-    for (const [key, timestamps] of requestMap) {
-        // If even the newest request is older than the window, drop the key
-        if (timestamps.length === 0 || timestamps[timestamps.length - 1] < now - maxWindow) {
-            requestMap.delete(key);
-        }
-    }
-}
-
-/**
- * Starts the periodic cleanup timer if it hasn't been started already.
- * Uses unref() so the timer doesn't prevent Node from exiting.
- */
-function ensureCleanupStarted(): void {
-    if (cleanupStarted) return;
-    cleanupStarted = true;
-
-    const timer = setInterval(cleanupExpiredEntries, CLEANUP_INTERVAL_MS);
-    // Allow the Node process to exit even if this timer is still active
-    if (typeof timer === 'object' && 'unref' in timer) {
-        timer.unref();
-    }
 }
 
 /**
@@ -92,9 +62,7 @@ function ensureCleanupStarted(): void {
  * @returns An object indicating whether the request is allowed, and
  *          how many seconds until the client can retry if not.
  */
-export function checkRateLimit(ip: string, action: string): RateLimitResult {
-    ensureCleanupStarted();
-
+export async function checkRateLimit(ip: string, action: string): Promise<RateLimitResult> {
     const config = ACTION_LIMITS[action];
     if (!config) {
         // Unknown action — allow by default (fail-open for unconfigured actions)
@@ -102,28 +70,40 @@ export function checkRateLimit(ip: string, action: string): RateLimitResult {
     }
 
     const key = `${ip}:${action}`;
-    const now = Date.now();
-    const windowStart = now - config.windowMs;
-
-    // Get existing timestamps and filter to only those within the current window
-    const existing = requestMap.get(key) ?? [];
-    const recentTimestamps = existing.filter((t) => t > windowStart);
-
-    if (recentTimestamps.length >= config.maxRequests) {
-        // Rate limit exceeded — calculate when the oldest request in the window expires
-        const oldestInWindow = recentTimestamps[0];
-        const retryAfterMs = oldestInWindow + config.windowMs - now;
-        const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
-
-        return {
-            allowed: false,
-            retryAfter: Math.max(1, retryAfterSeconds),
-        };
+    const supabase = getAdminClient();
+    if (!supabase) {
+        console.warn('[RateLimit] Missing Supabase environment variables. Bypassing rate limit.');
+        return { allowed: true };
     }
 
-    // Allow the request and record the timestamp
-    recentTimestamps.push(now);
-    requestMap.set(key, recentTimestamps);
+    // Use string type for intervals in PostgreSQL (e.g., "60000 milliseconds")
+    const intervalStr = `${config.windowMs} milliseconds`;
+
+    const { data, error } = await supabase.rpc('check_rate_limit', {
+        ip_action_key: key,
+        max_reqs: config.maxRequests,
+        window_interval: intervalStr,
+    } as any);
+
+    if (error) {
+        console.error('[RateLimit] Supabase RPC error:', error);
+        // Fail-open if the DB is unreachable to prevent breaking the app,
+        // or fail-closed depending on security posture. Fail-open is standard for this.
+        return { allowed: true };
+    }
+
+    // Parse the JSON result returned by the RPC
+    const result = data as any;
+    
+    // In case string came back instead of parsed json (due to typed RPC mismatches)
+    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+
+    if (parsed && parsed.allowed === false) {
+        return {
+            allowed: false,
+            retryAfter: parsed.retryAfter || Math.ceil(config.windowMs / 1000),
+        };
+    }
 
     return { allowed: true };
 }

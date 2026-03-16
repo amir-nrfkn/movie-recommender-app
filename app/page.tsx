@@ -7,11 +7,14 @@
  */
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { motion, useMotionValue, useTransform, useAnimation, useMotionValueEvent, AnimatePresence } from 'motion/react';
-import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film, RotateCcw } from 'lucide-react';
-import { fetchMovies, getMovieRecommendation } from '@/actions/movies';
+import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film, RotateCcw, Plus, Check } from 'lucide-react';
+import { fetchMovies, getMovieRecommendation, saveSwipe } from '@/actions/movies';
+import { toggleWatchlist } from '@/actions/watchlist';
+import { createClient } from '@/lib/supabase/client';
 import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 
 /**
@@ -112,7 +115,7 @@ function getRandomGradient() {
   return `linear-gradient(to bottom right, ${selected[0]}, ${selected[1]}, ${selected[2]})`;
 }
 
-function SwipeCard({ movie, onSwipe, isTop, index, onUndo, canUndo }: { movie: Movie, onSwipe: (action: SwipeAction, movie: Movie) => void, isTop: boolean, index: number, onUndo: () => void, canUndo: boolean }) {
+function SwipeCard({ movie, onSwipe, onSwipeStart, isTop, index, onUndo, canUndo }: { movie: Movie, onSwipe: (action: SwipeAction, movie: Movie) => void, onSwipeStart?: () => void, isTop: boolean, index: number, onUndo: () => void, canUndo: boolean }) {
   const [posterError, setPosterError] = useState(false);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
@@ -153,6 +156,7 @@ function SwipeCard({ movie, onSwipe, isTop, index, onUndo, canUndo }: { movie: M
     const absY = Math.abs(offset.y);
 
     if (Math.max(absX, absY) > swipeThreshold) {
+      if (onSwipeStart) onSwipeStart();
       let direction: SwipeAction;
       if (absX > absY) {
         direction = offset.x > 0 ? 'watched' : 'unwatched';
@@ -268,6 +272,9 @@ function Controls({ onAction }: { onAction: (action: SwipeAction) => void }) {
 }
 
 export default function Filmmoo() {
+  const router = useRouter();
+  const supabase = createClient();
+
   const [movies, setMovies] = useState<Movie[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [swipedMovies, setSwipedMovies] = useState<SwipedMovie[]>([]);
@@ -276,6 +283,13 @@ export default function Filmmoo() {
   const [isRecommending, setIsRecommending] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  // Watchlist state
+  const [isInWatchlist, setIsInWatchlist] = useState(false);
+  const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null);
+  const watchlistTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isAnimating = useRef(false);
 
   /**
    * Shows a temporary error banner that auto-dismisses after 5 seconds.
@@ -318,13 +332,21 @@ export default function Filmmoo() {
     fetchMoreMovies([]);
   }, [fetchMoreMovies]);
 
+  // Bug #1 related: Send only visible movies to exclude
   useEffect(() => {
     if (movies.length > 0 && currentIndex >= movies.length - 5 && !isFetching) {
-      fetchMoreMovies(movies.map(m => m.title));
+      const visibleIds = movies.slice(currentIndex, currentIndex + 5).map(m => String(m.id));
+      fetchMoreMovies(visibleIds);
     }
   }, [currentIndex, movies.length, isFetching, fetchMoreMovies]);
 
+  // Bug #2 Fix: Unlock swipe animation safely after index has updated and component has rendered
+  useEffect(() => {
+    isAnimating.current = false;
+  }, [currentIndex]);
+
   const handleSwipe = (action: SwipeAction, movie: Movie) => {
+    saveSwipe(movie.id, action);
     setSwipedMovies(prev => [...prev, { ...movie, action }]);
     setCurrentIndex(prev => prev + 1);
   };
@@ -390,8 +412,14 @@ export default function Filmmoo() {
 
     const newSwipedMovies = [...swipedMovies, { ...fakeMovie, action }];
     setSwipedMovies(newSwipedMovies);
+    
+    // Bug #3 Fix: Synchronously set these to avoid the single-frame UI flash
+    setIsRecommending(true);
     setRecommendation(null);
-    getRecommendation(newSwipedMovies);
+    setIsInWatchlist(false);
+    setWatchlistMessage(null);
+    
+    await getRecommendation(newSwipedMovies);
   };
 
   if (isRecommending && !recommendation) {
@@ -437,6 +465,37 @@ export default function Filmmoo() {
     );
   }
 
+  const handleToggleWatchlist = async () => {
+    if (!recommendation) return;
+    
+    // Check authentication
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        router.push('/login');
+        return;
+    }
+
+    const adding = !isInWatchlist;
+    setIsInWatchlist(adding);
+    setWatchlistMessage(adding ? `${recommendation.title} added to your watchlist` : "Removed from watchlist");
+    
+    if (watchlistTimerRef.current) {
+        clearTimeout(watchlistTimerRef.current);
+    }
+    
+    watchlistTimerRef.current = setTimeout(() => {
+      setWatchlistMessage(null);
+    }, 2000);
+
+    const actualState = await toggleWatchlist({
+      id: recommendation.title, // using title as unique ID for recommendations
+      title: recommendation.title,
+      posterUrl: recommendation.posterUrl,
+    }, adding);
+    
+    setIsInWatchlist(actualState);
+  };
+
   if (recommendation && !isRecommending) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col font-sans overflow-hidden">
@@ -460,6 +519,28 @@ export default function Filmmoo() {
             animate={{ opacity: 1, scale: 1 }}
             className="w-full max-w-sm aspect-[2/3] border border-white/10 rounded-3xl overflow-hidden relative flex flex-col shadow-[0_0_40px_rgba(0,0,0,0.8)]"
           >
+            {/* Watchlist Toggle Button */}
+            <button 
+              onClick={handleToggleWatchlist}
+              className="absolute top-4 right-4 z-50 w-12 h-12 rounded-full bg-black/40 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/60 transition-colors border border-white/20 shadow-lg"
+            >
+              {isInWatchlist ? <Check size={24} className="text-green-400" /> : <Plus size={24} />}
+            </button>
+
+            {/* Watchlist Toast Notification */}
+            <AnimatePresence>
+              {watchlistMessage && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 4 }}
+                  className="absolute top-4 left-1/2 -translate-x-1/2 h-12 flex items-center z-50 px-4 bg-black/80 backdrop-blur-md text-white text-xs font-mono rounded-full border border-white/10 shadow-xl whitespace-nowrap"
+                >
+                  {watchlistMessage}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Fixed Poster Background — uses Next.js Image for security and optimisation */}
             <div className="absolute inset-0 z-0 bg-white/5">
               {isTrustedPosterUrl(recommendation.posterUrl) ? (
@@ -588,7 +669,11 @@ export default function Filmmoo() {
                     movie={movie}
                     index={index}
                     isTop={isTop}
-                    onSwipe={handleSwipe}
+                    onSwipeStart={() => { isAnimating.current = true; }}
+                    onSwipe={(action, movie) => {
+                      handleSwipe(action, movie);
+                      // isAnimating is reset in the useEffect watching currentIndex
+                    }}
                     onUndo={handleUndo}
                     canUndo={currentIndex > 0}
                   />
@@ -600,8 +685,11 @@ export default function Filmmoo() {
 
         <Controls
           onAction={(action) => {
+            if (isAnimating.current) return;
             if (visibleMovies.length > 0) {
+              isAnimating.current = true;
               handleSwipe(action, visibleMovies[0]);
+              // Lock remains true until the layout effect un-locks it
             }
           }}
         />

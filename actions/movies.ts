@@ -15,14 +15,14 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import { headers } from 'next/headers';
-import type { Movie, SwipedMovie, Recommendation } from '@/types/movie';
+import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 import { isValidRecommendation } from '@/types/movie';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { sanitiseForPrompt } from '@/lib/sanitise';
 import { logger } from '@/lib/logger';
 
-const MOVIES_PER_BATCH = 15;
-const MAX_EXCLUSION_LIST_SIZE = 100;
+const MOVIES_PER_BATCH = 20;
+const MAX_EXCLUSION_LIST_SIZE = 500;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,8 +33,7 @@ const MAX_EXCLUSION_LIST_SIZE = 100;
 async function getClientIp(): Promise<string> {
     const headersList = await headers();
     return (
-        headersList.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-        headersList.get('x-real-ip') ??
+        headersList.get('x-vercel-forwarded-for') ??
         '127.0.0.1'
     );
 }
@@ -54,6 +53,47 @@ function movieLabel(m: SwipedMovie): string {
     return parts.join(' ');
 }
 
+import { createClient } from '@supabase/supabase-js';
+import type { Database } from '@/types/supabase';
+import { cookies } from 'next/headers';
+
+import { getSessionId } from '@/lib/session';
+
+// Helper to get an admin client (bypasses RLS)
+function getAdminClient() {
+    const roleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !roleKey) {
+        return null;
+    }
+    return createClient<Database>(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        roleKey,
+        { auth: { persistSession: false } }
+    );
+}
+
+// ─── Session Management ──────────────────────────────────────────────────────
+
+/**
+ * Stores a swipe action in the database against the current session.
+ */
+export async function saveSwipe(movieId: string, action: SwipeAction): Promise<void> {
+    try {
+        const sessionId = await getSessionId();
+        const supabase = getAdminClient();
+        if (!supabase) return;
+        
+        await supabase.from('swipe_history').insert({
+            session_id: sessionId,
+            movie_id: movieId,
+            action: action,
+        } as any);
+    } catch (err) {
+        logger.warn('SAVE_SWIPE_FAILED', { error: String(err) });
+        // Non-blocking, so we swallow the error rather than breaking the UI
+    }
+}
+
 // ─── fetchMovies ─────────────────────────────────────────────────────────────
 
 /**
@@ -61,14 +101,14 @@ function movieLabel(m: SwipedMovie): string {
  * endpoint with quality floors, rather than `top_rated` paged randomly.
  *
  * Rate limited to 30 requests per 60 seconds per IP.
- * Throws an error if the rate limit is exceeded so the client can display it.
+ * Excludes movies the user has already swiped in their session, plus any locally visible ones.
  */
 export async function fetchMovies(
-    exclude: string[]
-): Promise<Omit<Movie, 'id' | 'gradient'>[]> {
+    visibleIds: string[] = []
+): Promise<Omit<Movie, 'gradient'>[]> {
     // ── Rate limiting ──
     const ip = await getClientIp();
-    const rateCheck = checkRateLimit(ip, 'fetchMovies');
+    const rateCheck = await checkRateLimit(ip, 'fetchMovies');
     if (!rateCheck.allowed) {
         throw new Error(
             `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
@@ -81,6 +121,26 @@ export async function fetchMovies(
             logger.error('TMDB_KEY_MISSING');
             return [];
         }
+
+        const sessionId = await getSessionId();
+        const supabase = getAdminClient();
+        let dbExcludedIds: string[] = [];
+
+        if (supabase) {
+            // Fetch historically seen movies for this session
+            const { data: history } = await supabase
+                .from('swipe_history')
+                .select('movie_id')
+                .eq('session_id', sessionId);
+                
+            dbExcludedIds = (history as any[])?.map(h => h.movie_id) || [];
+        }
+
+        // Build a complete set of IDs to exclude (past history + current stack)
+        const excludedSet = new Set([
+            ...visibleIds.map(String),
+            ...dbExcludedIds.map(String)
+        ]);
 
         // Pages 1-8 of popularity-sorted discover are solidly mainstream
         const randomPage = Math.floor(Math.random() * 8) + 1;
@@ -106,14 +166,8 @@ export async function fetchMovies(
         const discoverData = await discoverRes.json();
         const results: any[] = discoverData.results || [];
 
-        // Sanitise exclude list to prevent downstream misuse, then deduplicate
-        const excludedSet = new Set(
-            exclude
-                .slice(-MAX_EXCLUSION_LIST_SIZE)
-                .map((t) => sanitiseForPrompt(t).toLowerCase())
-        );
         const filtered = results.filter(
-            (m) => !excludedSet.has((m.title as string).toLowerCase())
+            (m) => !excludedSet.has(String(m.id))
         );
 
         const selected = filtered.slice(0, MOVIES_PER_BATCH);
@@ -146,6 +200,7 @@ export async function fetchMovies(
                     : undefined;
 
                 return {
+                    id: String(d.id),
                     title: d.title as string,
                     year,
                     director,
@@ -159,7 +214,7 @@ export async function fetchMovies(
         });
 
         const resolved = await Promise.all(moviePromises);
-        return resolved.filter(Boolean) as Omit<Movie, 'id' | 'gradient'>[];
+        return resolved.filter(Boolean) as Omit<Movie, 'gradient'>[];
     } catch (error) {
         // Re-throw rate limit errors so the client can display them
         if (error instanceof Error && error.message.includes('Rate limit')) {
@@ -184,7 +239,7 @@ export async function getMovieRecommendation(
 ): Promise<Recommendation | null> {
     // ── Rate limiting ──
     const ip = await getClientIp();
-    const rateCheck = checkRateLimit(ip, 'getMovieRecommendation');
+    const rateCheck = await checkRateLimit(ip, 'getMovieRecommendation');
     if (!rateCheck.allowed) {
         throw new Error(
             `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`

@@ -7,3 +7,4 @@ coverage/
 !.env.example
 .agents/
 .bruin.yml
+agent/
