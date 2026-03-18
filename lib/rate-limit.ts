@@ -1,15 +1,8 @@
 /**
- * In-memory sliding-window rate limiter for Server Actions.
+ * Database-backed sliding-window rate limiter for Server Actions.
  *
- * Tracks request timestamps per IP+action key and enforces configurable
- * limits (e.g. 30 req/60s for fetchMovies, 10 req/60s for recommendations).
- *
- * ⚠️  SERVERLESS CAVEAT: On Vercel or similar platforms, each cold start
- * creates a fresh Map — so the rate limiter only protects within a single
- * instance's lifetime. For production-grade limiting across instances,
- * use a shared store like Redis / Upstash. This in-memory approach is
- * appropriate for single-instance deployments and provides baseline
- * protection against naive abuse scripts.
+ * Uses the Supabase RPC `check_rate_limit` for atomic counters per IP+action,
+ * which works correctly across multiple instances.
  */
 
 /** Per-action rate limit configuration. */
@@ -37,21 +30,7 @@ const ACTION_LIMITS: Record<string, RateLimitConfig> = {
     getMovieRecommendation: { maxRequests: 10, windowMs: 60_000 },
 };
 
-import { createClient } from '@supabase/supabase-js';
-import type { Database } from '@/types/supabase';
-
-// Helper to get an admin client (bypasses RLS)
-function getAdminClient() {
-    const roleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !roleKey) {
-        return null;
-    }
-    return createClient<Database>(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        roleKey,
-        { auth: { persistSession: false } }
-    );
-}
+import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
  * Checks whether a request from the given IP for the given action
@@ -70,7 +49,7 @@ export async function checkRateLimit(ip: string, action: string): Promise<RateLi
     }
 
     const key = `${ip}:${action}`;
-    const supabase = getAdminClient();
+    const supabase = createAdminClient();
     if (!supabase) {
         console.warn('[RateLimit] Missing Supabase environment variables. Bypassing rate limit.');
         return { allowed: true };

@@ -9,8 +9,10 @@
 
 /** A movie card displayed in the swipe stack. */
 export type Movie = {
-    /** Unique identifier generated client-side for React keys and deduplication. */
-    id: string;
+    /** Client-only identifier generated for React rendering keys. */
+    cardId: string;
+    /** Canonical TMDB movie ID persisted to Supabase. */
+    tmdbId: number;
     title: string;
     year: number;
     director: string;
@@ -21,6 +23,9 @@ export type Movie = {
     /** Optional TMDB movie poster URL to display on the card. */
     posterUrl?: string;
 };
+
+/** Movie payload returned by server actions before client UI decoration. */
+export type MovieCandidate = Omit<Movie, 'cardId' | 'gradient'>;
 
 /** The four possible user actions when interacting with a movie card. */
 export type SwipeAction = 'unwatched' | 'watched' | 'loved' | 'disliked';
@@ -41,6 +46,8 @@ export type Recommendation = {
     reason: string;
     /** Optional TMDB movie poster URL to display on the recommendation card. */
     posterUrl?: string;
+    /** Optional TMDB movie ID used for watchlist and swipe persistence. */
+    tmdbId?: number;
 };
 
 // ─── Validation ─────────────────────────────────────────────────────────────
@@ -71,6 +78,12 @@ export function isValidRecommendation(data: unknown): data is Recommendation {
 
     // posterUrl is optional — must be either undefined or a string
     if (obj.posterUrl !== undefined && typeof obj.posterUrl !== 'string') return false;
+    // tmdbId is optional — must be either undefined or a positive integer
+    if (obj.tmdbId !== undefined) {
+        if (typeof obj.tmdbId !== 'number') return false;
+        if (!Number.isInteger(obj.tmdbId)) return false;
+        if (obj.tmdbId <= 0) return false;
+    }
 
     return true;
 }

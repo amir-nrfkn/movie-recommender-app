@@ -35,7 +35,9 @@ const nextConfig: NextConfig = {
   transpilePackages: ['motion'],
   // Next.js 16 uses Turbopack by default. An empty config here tells it to
   // accept the webpack fallback below without erroring during builds.
-  turbopack: {},
+  turbopack: {
+    root: process.cwd(),
+  },
   webpack: (config, { dev }) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.
     // Do not modify — file watching is disabled to prevent flickering during agent edits.

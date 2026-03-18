@@ -6,11 +6,13 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { Loader2, Film } from 'lucide-react';
 import { login } from '@/actions/auth';
+import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -27,6 +29,30 @@ export default function LoginPage() {
       router.push('/');
       router.refresh();
     }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setIsGoogleLoading(true);
+    const supabase = createClient();
+    const redirectTo = `${window.location.origin}/auth/callback?next=/`;
+    const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+      },
+    });
+    if (oauthError) {
+      setError(oauthError.message);
+      setIsGoogleLoading(false);
+      return;
+    }
+    if (data?.url) {
+      window.location.assign(data.url);
+      return;
+    }
+    setError('Google sign-in failed. Please try again.');
+    setIsGoogleLoading(false);
   };
 
   return (
@@ -88,10 +114,19 @@ export default function LoginPage() {
             >
               {isLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Log In'}
             </button>
+
+            <button
+              disabled={isGoogleLoading}
+              type="button"
+              onClick={handleGoogleSignIn}
+              className="w-full h-12 mt-2 bg-transparent border border-white/20 text-white font-semibold rounded-2xl flex items-center justify-center hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGoogleLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Continue with Google'}
+            </button>
           </form>
 
           <div className="mt-6 text-center text-sm text-gray-400">
-            Don't have an account?{' '}
+            Don&apos;t have an account?{' '}
             <Link href="/signup" className="text-white font-medium hover:underline">
               Sign up
             </Link>

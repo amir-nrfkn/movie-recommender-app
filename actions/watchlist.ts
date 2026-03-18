@@ -1,59 +1,86 @@
 'use server';
 
-import { createClient } from '@supabase/supabase-js';
-import type { Database } from '@/types/supabase';
-import { getSessionId } from '@/lib/session';
-
-function getAdminClient() {
-    const roleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !roleKey) {
-        return null;
-    }
-    return createClient<Database>(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        roleKey,
-        { auth: { persistSession: false } }
-    );
-}
+import { createClient } from '@/lib/supabase/server';
 
 /**
- * Server action to toggle a movie in the user's watchlist.
- * Returns true if added, false if removed.
+ * Server action to set watchlist state idempotently.
+ * Returns the resulting state.
  */
-export async function toggleWatchlist(movie: { id: string, title: string, posterUrl?: string }, addingOptimistic: boolean): Promise<boolean> {
-    const supabase = getAdminClient();
-    if (!supabase) {
-        // Fallback for dev without supabase — return the expected optimistic state
-        return addingOptimistic; 
+export async function setWatchlistItem(
+  movie: { tmdbId: number; title: string; posterUrl?: string; year?: number },
+  shouldBeInWatchlist: boolean
+): Promise<boolean> {
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      throw new Error(authError.message);
+    }
+    if (!user) {
+      throw new Error('Unauthorized');
     }
 
-    const sessionId = await getSessionId();
-
-    // Check if it already exists
-    const { data: existing } = await supabase
-        .from('watchlists')
-        .select('id')
-        .eq('session_id', sessionId)
-        .eq('movie_id', movie.id)
-        .single();
-
-    if (existing) {
-        // Remove it
-        await supabase
-            .from('watchlists')
-            .delete()
-            .eq('id', (existing as any).id);
-        return false;
-    } else {
-        // Add it
-        await supabase
-            .from('watchlists')
-            .insert({
-                session_id: sessionId,
-                movie_id: movie.id,
-                movie_title: movie.title,
-                poster_url: movie.posterUrl || null,
-            } as any);
-        return true;
+    if (!movie.tmdbId || movie.tmdbId <= 0) {
+      throw new Error('Invalid TMDB movie ID');
     }
+
+    if (shouldBeInWatchlist) {
+      const { error } = await supabase.from('watchlists').upsert(
+        {
+          user_id: user.id,
+          tmdb_movie_id: movie.tmdbId,
+          movie_title: movie.title,
+          movie_year: movie.year ?? null,
+          poster_url: movie.posterUrl ?? null,
+        },
+        { onConflict: 'user_id,tmdb_movie_id' }
+      );
+
+      if (error) {
+        throw new Error(error.message);
+      }
+      return true;
+    }
+
+    const { error } = await supabase
+      .from('watchlists')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('tmdb_movie_id', movie.tmdbId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+    return false;
+}
+
+export async function isMovieInWatchlist(tmdbId: number): Promise<boolean> {
+  if (!tmdbId || tmdbId <= 0) return false;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError) {
+    throw new Error(authError.message);
+  }
+  if (!user) return false;
+
+  const { data, error } = await supabase
+    .from('watchlists')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('tmdb_movie_id', tmdbId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
 }

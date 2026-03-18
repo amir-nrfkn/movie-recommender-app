@@ -1,13 +1,13 @@
 # Filmmoo
 
-Filmmoo is a frictionless, Tinder-style movie recommendation app. Users swipe on movie posters to indicate their watch history and preferences. Based on these interactions, the app uses AI to generate highly personalized movie recommendations. No account creation is required to get a recommendation, allowing users to jump straight into the experience.
+Filmmoo is a Tinder-style movie recommendation app. Users swipe on movie posters to indicate watch history and preferences. Based on these interactions, the app uses AI to generate highly personalized movie recommendations. Authentication and persistence are powered by Supabase.
 
 ## 🌟 Features
 
 - **Swipe Interface:** Swipe left (Unwatched), right (Watched), up (Loved), or down (Disliked) on movie cards.
 - **AI-Powered Recommendations:** Get a single, highly personalized movie recommendation powered by the Gemini AI SDK, including a specific "Why you'll love it" reason.
 - **Infinite Scrolling/Swiping:** Continuously fetches new batches of movies using AI, ensuring you never run out of cards to swipe.
-- **Frictionless Onboarding:** Jump right in! No login, signup, or account creation is required to start getting recommendations.
+- **Authenticated Experience:** Login/signup (email/password + Google OAuth) to persist swipe history and watchlists.
 
 ## 🛠️ Tech Stack
 
@@ -30,8 +30,15 @@ Filmmoo is a frictionless, Tinder-style movie recommendation app. Users swipe on
    GEMINI_API_KEY="your_gemini_api_key_here"
    APP_URL="http://localhost:3000"
    TMDB_API_KEY="your_tmdb_api_key_here"
+   NEXT_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="sb_publishable_..."
+   SUPABASE_SECRET_KEY="sb_secret_..."
    ```
-3. Run the app:
+3. Run Supabase migrations:
+   ```bash
+   npx supabase db push
+   ```
+4. Run the app:
    ```bash
    npm run dev
    ```

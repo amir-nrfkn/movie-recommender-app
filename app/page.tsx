@@ -9,12 +9,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
 import { motion, useMotionValue, useTransform, useAnimation, useMotionValueEvent, AnimatePresence } from 'motion/react';
 import { EyeOff, Eye, Heart, ThumbsDown, Sparkles, Loader2, Film, RotateCcw, Plus, Check } from 'lucide-react';
 import { fetchMovies, getMovieRecommendation, saveSwipe } from '@/actions/movies';
-import { toggleWatchlist } from '@/actions/watchlist';
-import { createClient } from '@/lib/supabase/client';
+import { isMovieInWatchlist, setWatchlistItem } from '@/actions/watchlist';
 import type { Movie, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 
 /**
@@ -125,11 +123,7 @@ function SwipeCard({ movie, onSwipe, onSwipeStart, isTop, index, onUndo, canUndo
 
   const controls = useAnimation();
   const [label, setLabel] = useState<{ text: string; color: string } | null>(null);
-
-  useMotionValueEvent(x, "change", (latestX) => updateLabel(latestX, y.get()));
-  useMotionValueEvent(y, "change", (latestY) => updateLabel(x.get(), latestY));
-
-  function updateLabel(currentX: number, currentY: number) {
+  const updateLabel = (currentX: number, currentY: number) => {
     const absX = Math.abs(currentX);
     const absY = Math.abs(currentY);
     if (Math.max(absX, absY) < 60) {
@@ -147,7 +141,10 @@ function SwipeCard({ movie, onSwipe, onSwipeStart, isTop, index, onUndo, canUndo
         : { text: 'DISLIKED', color: 'bg-orange-500 text-white border-orange-400' }
       );
     }
-  }
+  };
+
+  useMotionValueEvent(x, "change", (latestX) => updateLabel(latestX, y.get()));
+  useMotionValueEvent(y, "change", (latestY) => updateLabel(x.get(), latestY));
 
   const handleDragEnd = async (event: any, info: any) => {
     const { offset } = info;
@@ -272,9 +269,6 @@ function Controls({ onAction }: { onAction: (action: SwipeAction) => void }) {
 }
 
 export default function Filmmoo() {
-  const router = useRouter();
-  const supabase = createClient();
-
   const [movies, setMovies] = useState<Movie[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [swipedMovies, setSwipedMovies] = useState<SwipedMovie[]>([]);
@@ -309,13 +303,13 @@ export default function Filmmoo() {
    * the functional form of setMovies/setIsFetching and receives `exclude`
    * as a parameter — no component state is closed over.
    */
-  const fetchMoreMovies = useCallback(async (exclude: string[]): Promise<void> => {
+  const fetchMoreMovies = useCallback(async (excludeTmdbIds: number[]): Promise<void> => {
     setIsFetching(true);
     try {
-      const rawMovies = await fetchMovies(exclude);
+      const rawMovies = await fetchMovies(excludeTmdbIds);
       const newMovies: Movie[] = rawMovies.map((m) => ({
         ...m,
-        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
+        cardId: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
         gradient: getRandomGradient(),
       }));
       setMovies((prev) => [...prev, ...newMovies]);
@@ -335,18 +329,54 @@ export default function Filmmoo() {
   // Bug #1 related: Send only visible movies to exclude
   useEffect(() => {
     if (movies.length > 0 && currentIndex >= movies.length - 5 && !isFetching) {
-      const visibleIds = movies.slice(currentIndex, currentIndex + 5).map(m => String(m.id));
-      fetchMoreMovies(visibleIds);
+      const visibleTmdbIds = movies.slice(currentIndex, currentIndex + 5).map((m) => m.tmdbId);
+      fetchMoreMovies(visibleTmdbIds);
     }
-  }, [currentIndex, movies.length, isFetching, fetchMoreMovies]);
+  }, [currentIndex, movies, isFetching, fetchMoreMovies]);
 
   // Bug #2 Fix: Unlock swipe animation safely after index has updated and component has rendered
   useEffect(() => {
     isAnimating.current = false;
   }, [currentIndex]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function syncWatchlistState() {
+      if (!recommendation?.tmdbId || recommendation.tmdbId <= 0) {
+        if (isMounted) setIsInWatchlist(false);
+        return;
+      }
+      try {
+        const inWatchlist = await isMovieInWatchlist(recommendation.tmdbId);
+        if (isMounted) {
+          setIsInWatchlist(inWatchlist);
+        }
+      } catch {
+        if (isMounted) {
+          setIsInWatchlist(false);
+        }
+      }
+    }
+
+    void syncWatchlistState();
+    return () => {
+      isMounted = false;
+    };
+  }, [recommendation?.tmdbId]);
+
   const handleSwipe = (action: SwipeAction, movie: Movie) => {
-    saveSwipe(movie.id, action);
+    void saveSwipe(
+      {
+        tmdbId: movie.tmdbId,
+        title: movie.title,
+        year: movie.year,
+        director: movie.director,
+        genre: movie.genre,
+        posterUrl: movie.posterUrl,
+      },
+      action
+    );
     setSwipedMovies(prev => [...prev, { ...movie, action }]);
     setCurrentIndex(prev => prev + 1);
   };
@@ -401,14 +431,28 @@ export default function Filmmoo() {
 
     // Convert recommendation to a generic movie payload to feed into swiped list
     const fakeMovie: Movie = {
-      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
+      cardId: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
+      tmdbId: recommendation.tmdbId ?? 0,
       title: recommendation.title,
       year: recommendation.year,
       director: recommendation.director,
       genre: recommendation.genre,
       synopsis: recommendation.synopsis,
       gradient: getRandomGradient(),
+      posterUrl: recommendation.posterUrl,
     };
+
+    void saveSwipe(
+      {
+        tmdbId: fakeMovie.tmdbId,
+        title: fakeMovie.title,
+        year: fakeMovie.year,
+        director: fakeMovie.director,
+        genre: fakeMovie.genre,
+        posterUrl: fakeMovie.posterUrl,
+      },
+      action
+    );
 
     const newSwipedMovies = [...swipedMovies, { ...fakeMovie, action }];
     setSwipedMovies(newSwipedMovies);
@@ -448,7 +492,7 @@ export default function Filmmoo() {
               />
             </div>
           </div>
-          <h2 className="text-2xl font-serif font-bold tracking-wide mb-2">Director's Cut</h2>
+          <h2 className="text-2xl font-serif font-bold tracking-wide mb-2">Director&apos;s Cut</h2>
           <AnimatePresence mode="wait">
             <motion.p
               key={loadingMessageIndex}
@@ -467,12 +511,10 @@ export default function Filmmoo() {
 
   const handleToggleWatchlist = async () => {
     if (!recommendation) return;
-    
-    // Check authentication
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        router.push('/login');
-        return;
+
+    if (!recommendation.tmdbId || recommendation.tmdbId <= 0) {
+      showError('Could not save this recommendation because TMDB metadata is missing.');
+      return;
     }
 
     const adding = !isInWatchlist;
@@ -487,13 +529,21 @@ export default function Filmmoo() {
       setWatchlistMessage(null);
     }, 2000);
 
-    const actualState = await toggleWatchlist({
-      id: recommendation.title, // using title as unique ID for recommendations
-      title: recommendation.title,
-      posterUrl: recommendation.posterUrl,
-    }, adding);
-    
-    setIsInWatchlist(actualState);
+    try {
+      const actualState = await setWatchlistItem(
+        {
+          tmdbId: recommendation.tmdbId,
+          title: recommendation.title,
+          year: recommendation.year,
+          posterUrl: recommendation.posterUrl,
+        },
+        adding
+      );
+      setIsInWatchlist(actualState);
+    } catch (error) {
+      setIsInWatchlist(!adding);
+      showError(error instanceof Error ? error.message : 'Failed to update watchlist.');
+    }
   };
 
   if (recommendation && !isRecommending) {
@@ -522,6 +572,7 @@ export default function Filmmoo() {
             {/* Watchlist Toggle Button */}
             <button 
               onClick={handleToggleWatchlist}
+              disabled={!recommendation.tmdbId}
               className="absolute top-4 right-4 z-50 w-12 h-12 rounded-full bg-black/40 backdrop-blur-md text-white flex items-center justify-center hover:bg-black/60 transition-colors border border-white/20 shadow-lg"
             >
               {isInWatchlist ? <Check size={24} className="text-green-400" /> : <Plus size={24} />}
@@ -583,7 +634,7 @@ export default function Filmmoo() {
                 {/* Fade at the top behind the first part */}
                 <div className="absolute bottom-full left-0 right-0 h-72 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/80 to-transparent pointer-events-none" />
 
-                <h3 className="text-[10px] font-bold tracking-widest text-pink-400/60 uppercase mb-2">Why you'll love it</h3>
+                <h3 className="text-[10px] font-bold tracking-widest text-pink-400/60 uppercase mb-2">Why you&apos;ll love it</h3>
                 <p className="text-pink-100/90 leading-relaxed text-sm italic mb-6">
                   {recommendation.reason}
                 </p>
@@ -597,9 +648,9 @@ export default function Filmmoo() {
 
           {/* Controls below the card */}
           <div className="mt-8 flex flex-col items-center w-full max-w-sm gap-4 z-10">
-            <div className="text-center text-xs text-white/60 font-mono">
+              <div className="text-center text-xs text-white/60 font-mono">
               Already seen? Get another recommendation
-            </div>
+              </div>
             <div className="flex justify-center gap-4">
               <button
                 onClick={() => handleAlreadySeen('disliked')}
@@ -660,12 +711,12 @@ export default function Filmmoo() {
             </div>
           ) : (
             <AnimatePresence>
-              {reversedVisible.map((movie, i) => {
-                const isTop = movie.id === visibleMovies[0].id;
-                const index = visibleMovies.findIndex(m => m.id === movie.id);
+              {reversedVisible.map((movie) => {
+                const isTop = movie.cardId === visibleMovies[0].cardId;
+                const index = visibleMovies.findIndex((m) => m.cardId === movie.cardId);
                 return (
                   <SwipeCard
-                    key={movie.id}
+                    key={movie.cardId}
                     movie={movie}
                     index={index}
                     isTop={isTop}

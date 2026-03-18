@@ -3,4 +3,7 @@ import next from "eslint-config-next";
 
 export default defineConfig([{
     extends: [...next],
+    rules: {
+      "react/display-name": "off",
+    },
 }]);
