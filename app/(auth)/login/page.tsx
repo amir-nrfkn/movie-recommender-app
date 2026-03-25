@@ -22,13 +22,14 @@ export default function LoginPage() {
     const formData = new FormData(e.currentTarget);
     const result = await login(formData);
 
-    if (result?.error) {
+    if (result.status === 'error') {
       setError(result.error);
       setIsLoading(false);
-    } else {
-      router.push('/');
-      router.refresh();
+      return;
     }
+
+    router.push('/');
+    router.refresh();
   };
 
   const handleGoogleSignIn = async () => {
