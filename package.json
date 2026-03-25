@@ -1,5 +1,5 @@
 {
-  "name": "ai-studio-applet",
+  "name": "filmmoo",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -18,7 +18,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.553.0",
     "motion": "^12.23.24",
-    "next": "^16.1.6",
+    "next": "^16.2.1",
     "postcss": "^8.5.6",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

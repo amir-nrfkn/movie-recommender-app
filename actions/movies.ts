@@ -12,6 +12,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { sanitiseForPrompt } from '@/lib/sanitise';
 import { logger } from '@/lib/logger';
 import { createClient } from '@/lib/supabase/server';
+import { buildPosterUrl, pickBestTmdbMatch } from '@/lib/tmdb';
 
 const MOVIES_PER_BATCH = 20;
 
@@ -317,12 +318,12 @@ Return ONLY valid JSON — no markdown, no preamble.
         );
         if (searchRes.ok) {
           const searchData = await searchRes.json();
-          const topResult = searchData.results?.[0];
-          if (topResult?.poster_path) {
-            recommendation.posterUrl = `https://image.tmdb.org/t/p/w500${topResult.poster_path}`;
+          const bestMatch = pickBestTmdbMatch(searchData.results, recommendation);
+          if (bestMatch?.poster_path) {
+            recommendation.posterUrl = buildPosterUrl(bestMatch.poster_path);
           }
-          if (topResult?.id) {
-            recommendation.tmdbId = Number(topResult.id);
+          if (bestMatch?.id) {
+            recommendation.tmdbId = Number(bestMatch.id);
           }
         }
       } catch (err) {

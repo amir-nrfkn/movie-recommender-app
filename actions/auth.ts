@@ -1,14 +1,15 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import type { AuthActionResult, SignupActionResult } from '@/types/auth';
 import { revalidatePath } from 'next/cache';
 
-export async function login(formData: FormData) {
+export async function login(formData: FormData): Promise<AuthActionResult> {
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
 
   if (!email || !password) {
-    return { error: 'Email and password are required' };
+    return { status: 'error', error: 'Email and password are required' };
   }
 
   const supabase = await createClient();
@@ -19,26 +20,25 @@ export async function login(formData: FormData) {
   });
 
   if (error) {
-    return { error: error.message };
+    return { status: 'error', error: error.message };
   }
 
   revalidatePath('/', 'layout');
-  return { success: true };
+  return { status: 'success' };
 }
 
-export async function signup(formData: FormData) {
+export async function signup(formData: FormData): Promise<SignupActionResult> {
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
   const name = formData.get('name') as string;
 
   if (!email || !password) {
-    return { error: 'Email and password are required' };
+    return { status: 'error', error: 'Email and password are required' };
   }
 
   const supabase = await createClient();
 
-  // Create the user. The trigger will create the profile automatically.
-  const { error } = await supabase.auth.signUp({
+  const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
@@ -49,11 +49,19 @@ export async function signup(formData: FormData) {
   });
 
   if (error) {
-    return { error: error.message };
+    return { status: 'error', error: error.message };
   }
 
   revalidatePath('/', 'layout');
-  return { success: true };
+
+  if (data.session) {
+    return { status: 'signed-in' };
+  }
+
+  return {
+    status: 'email-confirmation-required',
+    email,
+  };
 }
 
 export async function logout() {

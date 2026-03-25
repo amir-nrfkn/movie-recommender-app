@@ -4,13 +4,14 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
-import { Loader2, Film } from 'lucide-react';
+import { Loader2, Film, MailCheck } from 'lucide-react';
 import { signup } from '@/actions/auth';
 import { createClient } from '@/lib/supabase/client';
 
 export default function SignupPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
@@ -18,17 +19,25 @@ export default function SignupPage() {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
+    setPendingEmail(null);
 
     const formData = new FormData(e.currentTarget);
     const result = await signup(formData);
 
-    if (result?.error) {
+    if (result.status === 'error') {
       setError(result.error);
       setIsLoading(false);
-    } else {
-      router.push('/');
-      router.refresh();
+      return;
     }
+
+    if (result.status === 'email-confirmation-required') {
+      setPendingEmail(result.email);
+      setIsLoading(false);
+      return;
+    }
+
+    router.push('/');
+    router.refresh();
   };
 
   const handleGoogleSignIn = async () => {
@@ -73,75 +82,104 @@ export default function SignupPage() {
             </div>
             <span className="text-2xl font-bold tracking-tight">Filmmoo</span>
           </Link>
-          <h1 className="text-2xl font-semibold mb-2">Create an account</h1>
-          <p className="text-gray-400 text-sm">Join to personalize your recommendations and save movies to your watchlist.</p>
+          <h1 className="text-2xl font-semibold mb-2">
+            {pendingEmail ? 'Check your email' : 'Create an account'}
+          </h1>
+          <p className="text-gray-400 text-sm">
+            {pendingEmail
+              ? 'You may need to confirm your email before Filmmoo signs you in.'
+              : 'Join to personalize your recommendations and save movies to your watchlist.'}
+          </p>
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-3xl p-6 backdrop-blur-xl shadow-2xl">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="p-3 text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-xl">
-                {error}
+          {pendingEmail ? (
+            <div className="space-y-4 text-center">
+              <div className="mx-auto w-14 h-14 rounded-full bg-blue-500/10 text-blue-300 flex items-center justify-center border border-blue-400/20">
+                <MailCheck size={24} />
               </div>
-            )}
-            
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-300 ml-1">Name (optional)</label>
-              <input 
-                name="name"
-                type="text"
-                className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                placeholder="Jane Doe"
-              />
+              <div className="text-sm text-gray-300">
+                We sent a confirmation link to <span className="text-white font-medium">{pendingEmail}</span>.
+              </div>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Open the email, confirm your account, then come back and log in if Filmmoo doesn&apos;t sign you in automatically.
+              </p>
+              <button
+                type="button"
+                onClick={() => setPendingEmail(null)}
+                className="w-full h-12 bg-white text-black font-semibold rounded-2xl hover:bg-gray-100 transition-colors"
+              >
+                Use a different email
+              </button>
             </div>
+          ) : (
+            <>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {error && (
+                  <div className="p-3 text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-xl">
+                    {error}
+                  </div>
+                )}
+                
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-gray-300 ml-1">Name (optional)</label>
+                  <input 
+                    name="name"
+                    type="text"
+                    className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                    placeholder="Jane Doe"
+                  />
+                </div>
 
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-300 ml-1">Email</label>
-              <input 
-                name="email"
-                type="email"
-                required
-                className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                placeholder="you@example.com"
-              />
-            </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-gray-300 ml-1">Email</label>
+                  <input 
+                    name="email"
+                    type="email"
+                    required
+                    className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                    placeholder="you@example.com"
+                  />
+                </div>
 
-            <div className="space-y-1">
-              <label className="text-sm font-medium text-gray-300 ml-1">Password</label>
-              <input 
-                name="password"
-                type="password"
-                required
-                minLength={6}
-                className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                placeholder="••••••••"
-              />
-            </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-gray-300 ml-1">Password</label>
+                  <input 
+                    name="password"
+                    type="password"
+                    required
+                    minLength={6}
+                    className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                    placeholder="••••••••"
+                  />
+                </div>
 
-            <button
-              disabled={isLoading}
-              type="submit"
-              className="w-full h-12 mt-4 bg-white text-black font-semibold rounded-2xl flex items-center justify-center hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Sign Up'}
-            </button>
+                <button
+                  disabled={isLoading}
+                  type="submit"
+                  className="w-full h-12 mt-4 bg-white text-black font-semibold rounded-2xl flex items-center justify-center hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Sign Up'}
+                </button>
 
-            <button
-              disabled={isGoogleLoading}
-              type="button"
-              onClick={handleGoogleSignIn}
-              className="w-full h-12 mt-2 bg-transparent border border-white/20 text-white font-semibold rounded-2xl flex items-center justify-center hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isGoogleLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Continue with Google'}
-            </button>
-          </form>
+                <button
+                  disabled={isGoogleLoading}
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  className="w-full h-12 mt-2 bg-transparent border border-white/20 text-white font-semibold rounded-2xl flex items-center justify-center hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGoogleLoading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Continue with Google'}
+                </button>
+              </form>
 
-          <div className="mt-6 text-center text-sm text-gray-400">
-            Already have an account?{' '}
-            <Link href="/login" className="text-white font-medium hover:underline">
-              Log in
-            </Link>
-          </div>
+              <div className="mt-6 text-center text-sm text-gray-400">
+                Already have an account?{' '}
+                <Link href="/login" className="text-white font-medium hover:underline">
+                  Log in
+                </Link>
+              </div>
+            </>
+          )}
         </div>
       </motion.div>
     </div>
