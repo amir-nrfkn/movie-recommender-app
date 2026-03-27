@@ -48,6 +48,8 @@ export type Recommendation = {
     posterUrl?: string;
     /** Optional TMDB movie ID used for watchlist and swipe persistence. */
     tmdbId?: number;
+    /** Optional source tag to preserve lineage when reused elsewhere in the UI. */
+    source?: 'recommendation';
 };
 
 // ─── Validation ─────────────────────────────────────────────────────────────

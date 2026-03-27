@@ -7,6 +7,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { headers } from 'next/headers';
 import type { MovieCandidate, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
+import type { MovieDetail } from '@/types/library';
 import { isValidRecommendation } from '@/types/movie';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { sanitiseForPrompt } from '@/lib/sanitise';
@@ -46,14 +47,7 @@ function movieLabel(m: SwipedMovie): string {
  * Inserts an immutable event row, then updates current state for fast reads.
  */
 export async function saveSwipe(
-  movie: {
-    tmdbId: number;
-    title: string;
-    year: number;
-    director: string;
-    genre: string;
-    posterUrl?: string;
-  },
+  movie: MovieDetail,
   action: SwipeAction
 ): Promise<void> {
   try {
@@ -74,6 +68,9 @@ export async function saveSwipe(
       p_movie_director: movie.director || undefined,
       p_movie_genre: movie.genre || undefined,
       p_poster_url: movie.posterUrl || undefined,
+      p_movie_synopsis: movie.synopsis || undefined,
+      p_recommendation_reason: movie.recommendationReason || undefined,
+      p_source: movie.source || undefined,
     });
 
     if (error) {
@@ -304,7 +301,7 @@ Return ONLY valid JSON — no markdown, no preamble.
       return null;
     }
 
-    const recommendation: Recommendation = { ...parsed };
+    const recommendation: Recommendation = { ...parsed, source: 'recommendation' };
 
     const apiKey = process.env.TMDB_API_KEY;
     if (apiKey && recommendation.title) {
