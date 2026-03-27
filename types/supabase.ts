@@ -64,6 +64,9 @@ export type Database = {
           movie_director: string | null
           movie_genre: string | null
           poster_url: string | null
+          movie_synopsis: string | null
+          recommendation_reason: string | null
+          source: string | null
           created_at: string
         }
         Insert: {
@@ -76,6 +79,9 @@ export type Database = {
           movie_director?: string | null
           movie_genre?: string | null
           poster_url?: string | null
+          movie_synopsis?: string | null
+          recommendation_reason?: string | null
+          source?: string | null
           created_at?: string
         }
         Update: {
@@ -88,6 +94,9 @@ export type Database = {
           movie_director?: string | null
           movie_genre?: string | null
           poster_url?: string | null
+          movie_synopsis?: string | null
+          recommendation_reason?: string | null
+          source?: string | null
           created_at?: string
         }
         Relationships: [
@@ -139,6 +148,12 @@ export type Database = {
           tmdb_movie_id: number
           movie_title: string | null
           movie_year: number | null
+          movie_director: string | null
+          movie_genre: string | null
+          movie_synopsis: string | null
+          recommendation_reason: string | null
+          source: string | null
+          recommended_at: string | null
           poster_url: string | null
           created_at: string
           updated_at: string
@@ -149,6 +164,12 @@ export type Database = {
           tmdb_movie_id: number
           movie_title?: string | null
           movie_year?: number | null
+          movie_director?: string | null
+          movie_genre?: string | null
+          movie_synopsis?: string | null
+          recommendation_reason?: string | null
+          source?: string | null
+          recommended_at?: string | null
           poster_url?: string | null
           created_at?: string
           updated_at?: string
@@ -159,6 +180,12 @@ export type Database = {
           tmdb_movie_id?: number
           movie_title?: string | null
           movie_year?: number | null
+          movie_director?: string | null
+          movie_genre?: string | null
+          movie_synopsis?: string | null
+          recommendation_reason?: string | null
+          source?: string | null
+          recommended_at?: string | null
           poster_url?: string | null
           created_at?: string
           updated_at?: string
@@ -195,6 +222,9 @@ export type Database = {
           p_movie_director?: string
           p_movie_genre?: string
           p_poster_url?: string
+          p_movie_synopsis?: string
+          p_recommendation_reason?: string
+          p_source?: string
         }
         Returns: undefined
       }

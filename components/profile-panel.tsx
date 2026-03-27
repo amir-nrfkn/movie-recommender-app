@@ -1,0 +1,93 @@
+'use client';
+
+import { useState, useTransition } from 'react';
+import { updateEmail, updatePassword, updateProfileName } from '@/actions/library';
+import { logout } from '@/actions/auth';
+import type { ProfileDetails } from '@/types/library';
+
+export function ProfilePanel({ profile }: { profile: ProfileDetails | null }) {
+  const [name, setName] = useState(profile?.name ?? '');
+  const [email, setEmail] = useState(profile?.email ?? '');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const runAction = (fn: () => Promise<{ status: 'success'; message?: string } | { status: 'error'; error: string }>) => {
+    setMessage(null);
+    setError(null);
+    startTransition(async () => {
+      const result = await fn();
+      if (result.status === 'error') {
+        setError(result.error);
+        return;
+      }
+      setMessage(result.message ?? 'Saved.');
+      setPassword('');
+    });
+  };
+
+  return (
+    <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-2xl overflow-hidden p-6 space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold">Profile</h2>
+        <p className="text-xs text-white/50 mt-1">Manage your Filmmoo account and sign-in details.</p>
+      </div>
+
+      {message ? <div className="p-3 text-sm text-green-300 bg-green-400/10 border border-green-400/20 rounded-xl">{message}</div> : null}
+      {error ? <div className="p-3 text-sm text-red-300 bg-red-400/10 border border-red-400/20 rounded-xl">{error}</div> : null}
+
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          runAction(async () => {
+            const formData = new FormData();
+            formData.set('name', name);
+            return updateProfileName(formData);
+          });
+        }}
+      >
+        <div className="text-xs uppercase tracking-widest text-white/40">Display name</div>
+        <input value={name} onChange={(e) => setName(e.target.value)} className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white" placeholder="Your name" />
+        <button disabled={isPending} className="w-full h-11 rounded-2xl bg-white text-black font-semibold disabled:opacity-60">Save name</button>
+      </form>
+
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          runAction(async () => {
+            const formData = new FormData();
+            formData.set('email', email);
+            return updateEmail(formData);
+          });
+        }}
+      >
+        <div className="text-xs uppercase tracking-widest text-white/40">Email</div>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white" placeholder="you@example.com" />
+        <button disabled={isPending} className="w-full h-11 rounded-2xl bg-white/10 border border-white/10 text-white font-semibold disabled:opacity-60">Update email</button>
+      </form>
+
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          runAction(async () => {
+            const formData = new FormData();
+            formData.set('password', password);
+            return updatePassword(formData);
+          });
+        }}
+      >
+        <div className="text-xs uppercase tracking-widest text-white/40">Password</div>
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" className="w-full h-12 bg-black/40 border border-white/10 rounded-2xl px-4 text-white" placeholder="New password" minLength={6} />
+        <button disabled={isPending || password.length < 6} className="w-full h-11 rounded-2xl bg-white/10 border border-white/10 text-white font-semibold disabled:opacity-60">Update password</button>
+      </form>
+
+      <form action={logout}>
+        <button className="w-full h-11 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 font-semibold">Log out</button>
+      </form>
+    </div>
+  );
+}

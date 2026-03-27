@@ -12,8 +12,8 @@ export function SwipeControls({ onAction }: { onAction: (action: SwipeAction) =>
       <button onClick={() => onAction('disliked')} className="w-14 h-14 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center hover:bg-orange-500/20 transition-colors border border-orange-500/30">
         <ThumbsDown size={24} />
       </button>
-      <button onClick={() => onAction('loved')} className="w-16 h-16 rounded-full bg-pink-500/10 text-pink-500 flex items-center justify-center hover:bg-pink-500/20 transition-colors border border-pink-500/30">
-        <Heart size={32} />
+      <button onClick={() => onAction('loved')} className="w-14 h-14 rounded-full bg-pink-500/10 text-pink-500 flex items-center justify-center hover:bg-pink-500/20 transition-colors border border-pink-500/30">
+        <Heart size={24} />
       </button>
       <button onClick={() => onAction('watched')} className="w-14 h-14 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center hover:bg-green-500/20 transition-colors border border-green-500/30">
         <Eye size={24} />
