@@ -6,7 +6,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Loader2, Film } from 'lucide-react';
-import { fetchMovies, getMovieRecommendation, saveSwipe } from '@/actions/movies';
+import { getMovieRecommendation, saveSwipe } from '@/actions/movies';
+import { getQueuedMovies, refillQueuedMovies } from '@/actions/queue';
 import { getCurrentUserProfile, getSwipeHistory } from '@/actions/library';
 import { getWatchlistItems, isMovieInWatchlist, setWatchlistItem } from '@/actions/watchlist';
 import { AppHeader } from '@/components/app-header';
@@ -176,16 +177,21 @@ export default function Filmmoo() {
     }
   }, [showError]);
 
-  const fetchMoreMovies = useCallback(async (excludeTmdbIds: number[]) => {
+  const fetchMoreMovies = useCallback(async (forceRefill = false) => {
     setIsFetching(true);
     try {
-      const rawMovies = await fetchMovies(excludeTmdbIds);
+      const rawMovies = forceRefill ? await refillQueuedMovies() : await getQueuedMovies();
       exhaustedDeckRef.current = rawMovies.length === 0;
-      const newMovies: Movie[] = rawMovies.map((movie) => ({
+      const existingIds = new Set(movies.slice(currentIndex).map((movie) => movie.tmdbId));
+      const deduped = rawMovies.filter((movie) => !existingIds.has(movie.tmdbId));
+      const newMovies: Movie[] = deduped.map((movie) => ({
         ...movie,
         cardId: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
         gradient: getRandomGradient(),
       }));
+      if (newMovies.length === 0) {
+        exhaustedDeckRef.current = true;
+      }
       setMovies((prev) => [...prev, ...newMovies]);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load movies. Please try again.';
@@ -196,11 +202,11 @@ export default function Filmmoo() {
     } finally {
       setIsFetching(false);
     }
-  }, [showError]);
+  }, [currentIndex, movies, showError]);
 
   useEffect(() => {
     exhaustedDeckRef.current = false;
-    void fetchMoreMovies([]);
+    void fetchMoreMovies();
     void refreshLibraryData();
   }, [fetchMoreMovies, refreshLibraryData]);
 
@@ -219,8 +225,7 @@ export default function Filmmoo() {
     }
 
     lastPrefetchAtRef.current = now;
-    const visibleTmdbIds = movies.slice(currentIndex, currentIndex + 5).map((movie) => movie.tmdbId);
-    void fetchMoreMovies(visibleTmdbIds);
+    void fetchMoreMovies();
   }, [currentIndex, movies, isFetching, fetchMoreMovies]);
 
   useEffect(() => {
@@ -551,7 +556,7 @@ export default function Filmmoo() {
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50 text-center px-6">
                   <p className="font-mono text-sm mb-3">No movies loaded.</p>
                   <button
-                    onClick={() => void fetchMoreMovies([])}
+                    onClick={() => void fetchMoreMovies(true)}
                     className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors text-sm border border-white/10"
                   >
                     Reload movies
