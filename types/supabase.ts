@@ -35,6 +35,63 @@ export type Database = {
           },
         ]
       }
+      movies_cache: {
+        Row: {
+          tmdb_movie_id: number
+          title: string
+          year: number | null
+          director: string | null
+          genre: string | null
+          synopsis: string | null
+          poster_url: string | null
+          top_actors: string[]
+          release_date: string | null
+          popularity: number | null
+          vote_average: number | null
+          vote_count: number | null
+          original_language: string | null
+          source_tier: string | null
+          cached_at: string
+          updated_at: string
+        }
+        Insert: {
+          tmdb_movie_id: number
+          title: string
+          year?: number | null
+          director?: string | null
+          genre?: string | null
+          synopsis?: string | null
+          poster_url?: string | null
+          top_actors?: string[]
+          release_date?: string | null
+          popularity?: number | null
+          vote_average?: number | null
+          vote_count?: number | null
+          original_language?: string | null
+          source_tier?: string | null
+          cached_at?: string
+          updated_at?: string
+        }
+        Update: {
+          tmdb_movie_id?: number
+          title?: string
+          year?: number | null
+          director?: string | null
+          genre?: string | null
+          synopsis?: string | null
+          poster_url?: string | null
+          top_actors?: string[]
+          release_date?: string | null
+          popularity?: number | null
+          vote_average?: number | null
+          vote_count?: number | null
+          original_language?: string | null
+          source_tier?: string | null
+          cached_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       rate_limits: {
         Row: {
           key: string
@@ -141,6 +198,54 @@ export type Database = {
           },
         ]
       }
+      user_movie_queue: {
+        Row: {
+          id: string
+          user_id: string
+          tmdb_movie_id: number
+          queue_rank: number
+          source_tier: string | null
+          created_at: string
+          consumed_at: string | null
+          discarded_at: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          tmdb_movie_id: number
+          queue_rank: number
+          source_tier?: string | null
+          created_at?: string
+          consumed_at?: string | null
+          discarded_at?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          tmdb_movie_id?: number
+          queue_rank?: number
+          source_tier?: string | null
+          created_at?: string
+          consumed_at?: string | null
+          discarded_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'user_movie_queue_tmdb_movie_id_fkey'
+            columns: ['tmdb_movie_id']
+            isOneToOne: false
+            referencedRelation: 'movies_cache'
+            referencedColumns: ['tmdb_movie_id']
+          },
+          {
+            foreignKeyName: 'user_movie_queue_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       watchlists: {
         Row: {
           id: string
@@ -226,7 +331,7 @@ export type Database = {
           p_recommendation_reason?: string
           p_source?: string
         }
-        Returns: undefined
+        Returns: boolean
       }
     }
     Enums: {
