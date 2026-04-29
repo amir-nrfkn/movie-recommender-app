@@ -208,7 +208,8 @@ export default function Filmmoo() {
     exhaustedDeckRef.current = false;
     void fetchMoreMovies();
     void refreshLibraryData();
-  }, [fetchMoreMovies, refreshLibraryData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const remainingCards = movies.length - currentIndex;
@@ -264,8 +265,10 @@ export default function Filmmoo() {
   }, [selectedDetail, syncWatchlistStateForMovie]);
 
   const persistSwipe = useCallback((movie: MovieDetail, action: SwipeAction) => {
-    void saveSwipe(movie, action);
-  }, []);
+    saveSwipe(movie, action).catch((error) => {
+      showError(error instanceof Error ? error.message : 'Failed to save your swipe.');
+    });
+  }, [showError]);
 
   const handleSwipe = useCallback((action: SwipeAction, movie: Movie) => {
     persistSwipe({

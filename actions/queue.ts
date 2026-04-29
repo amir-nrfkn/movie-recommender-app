@@ -1,11 +1,31 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { logger } from '@/lib/logger';
 import { getActiveQueueForUser, getCachedMoviesByIds, getQueueConfig, getQueueState, upsertMoviesCache } from '@/lib/movie-queue';
+import { checkRateLimit } from '@/lib/rate-limit';
 import type { MovieCandidate } from '@/types/movie';
 import type { CachedMovie, QueuedMovie, SourceTier } from '@/types/queue';
+
+async function getClientIp(): Promise<string> {
+  const headersList = await headers();
+  const forwarded = headersList.get('x-vercel-forwarded-for') ?? headersList.get('x-forwarded-for');
+  if (!forwarded) return '127.0.0.1';
+  return forwarded.split(',')[0]?.trim() || '127.0.0.1';
+}
+
+async function enforceRateLimit(
+  action: 'getQueuedMovies' | 'refillQueuedMovies',
+  userId: string
+): Promise<void> {
+  const ip = await getClientIp();
+  const result = await checkRateLimit(ip, action, userId);
+  if (!result.allowed) {
+    throw new Error(`Rate limit exceeded. Please try again in ${result.retryAfter} seconds.`);
+  }
+}
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 
@@ -205,32 +225,20 @@ async function fillQueueForUser(userId: string, minimumToAdd: number): Promise<v
     }
   }
 
-  const queueState = await getQueueState(userId);
-  let nextRank = queueState.highestRank + 1;
-
-  const queuePayload: Array<{
-    user_id: string;
-    tmdb_movie_id: number;
-    queue_rank: number;
-    source_tier: SourceTier;
-  }> = discovered
+  const enqueuePayload = discovered
     .flatMap((item) => {
       const cached = cachedMap.get(item.tmdbId);
       if (!cached) return [];
-      return [{
-        user_id: userId,
-        tmdb_movie_id: item.tmdbId,
-        queue_rank: nextRank++,
-        source_tier: item.tier,
-      }];
+      return [{ tmdb_movie_id: item.tmdbId, source_tier: item.tier }];
     })
     .slice(0, minimumToAdd);
 
-  if (queuePayload.length === 0) return;
+  if (enqueuePayload.length === 0) return;
 
-  const { error } = await admin
-    .from('user_movie_queue')
-    .insert(queuePayload);
+  const { error } = await admin.rpc('enqueue_user_movies', {
+    p_user_id: userId,
+    p_movies: enqueuePayload,
+  });
 
   if (error) {
     logger.warn('QUEUE_REFILL_FAILED', { error: error.message, userId });
@@ -239,6 +247,7 @@ async function fillQueueForUser(userId: string, minimumToAdd: number): Promise<v
 
 export async function getQueuedMovies(limit = getQueueConfig().deliverBatchSize): Promise<MovieCandidate[]> {
   const userId = await getAuthenticatedUserId();
+  await enforceRateLimit('getQueuedMovies', userId);
   const queueConfig = getQueueConfig();
   const queueState = await getQueueState(userId);
 
@@ -266,6 +275,7 @@ export async function getQueuedMovies(limit = getQueueConfig().deliverBatchSize)
 
 export async function refillQueuedMovies(): Promise<MovieCandidate[]> {
   const userId = await getAuthenticatedUserId();
+  await enforceRateLimit('refillQueuedMovies', userId);
   const queueConfig = getQueueConfig();
   await fillQueueForUser(userId, queueConfig.targetSize);
   const queued = await getActiveQueueForUser(userId, queueConfig.deliverBatchSize);

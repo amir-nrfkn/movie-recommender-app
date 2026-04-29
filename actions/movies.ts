@@ -6,7 +6,7 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import { headers } from 'next/headers';
-import type { MovieCandidate, SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
+import type { SwipeAction, SwipedMovie, Recommendation } from '@/types/movie';
 import type { MovieDetail } from '@/types/library';
 import { isValidRecommendation } from '@/types/movie';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -14,8 +14,6 @@ import { sanitiseForPrompt } from '@/lib/sanitise';
 import { logger } from '@/lib/logger';
 import { createClient } from '@/lib/supabase/server';
 import { buildPosterUrl, pickBestTmdbMatch } from '@/lib/tmdb';
-
-const MOVIES_PER_BATCH = 20;
 
 /**
  * Reads the client IP from Next.js request headers.
@@ -50,156 +48,33 @@ export async function saveSwipe(
   movie: MovieDetail,
   action: SwipeAction
 ): Promise<void> {
-  try {
-    if (!movie.tmdbId || movie.tmdbId <= 0) return;
-
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) return;
-
-    const { error } = await supabase.rpc('record_swipe_event', {
-      p_tmdb_movie_id: movie.tmdbId,
-      p_action: action,
-      p_movie_title: movie.title || undefined,
-      p_movie_year: movie.year || undefined,
-      p_movie_director: movie.director || undefined,
-      p_movie_genre: movie.genre || undefined,
-      p_poster_url: movie.posterUrl || undefined,
-      p_movie_synopsis: movie.synopsis || undefined,
-      p_recommendation_reason: movie.recommendationReason || undefined,
-      p_source: movie.source || undefined,
-    });
-
-    if (error) {
-      logger.warn('SAVE_SWIPE_RPC_FAILED', { error: error.message });
-    }
-  } catch (err) {
-    logger.warn('SAVE_SWIPE_FAILED', { error: String(err) });
-  }
-}
-
-/**
- * Fetches a batch of mainstream movies from TMDB discover.
- * Excludes movies already swiped by the authenticated user and currently visible cards.
- */
-export async function fetchMovies(visibleTmdbIds: number[] = []): Promise<MovieCandidate[]> {
-  const ip = await getClientIp();
-  const rateCheck = await checkRateLimit(ip, 'fetchMovies');
-  if (!rateCheck.allowed) {
-    throw new Error(
-      `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
-    );
-  }
+  if (!movie.tmdbId || movie.tmdbId <= 0) return;
 
   const supabase = await createClient();
   const {
     data: { user },
-    error: authError,
   } = await supabase.auth.getUser();
 
-  if (authError || !user) {
+  if (!user) {
     throw new Error('Unauthorized');
   }
 
-  try {
-    const apiKey = process.env.TMDB_API_KEY;
-    if (!apiKey) {
-      logger.error('TMDB_KEY_MISSING');
-      return [];
-    }
+  const { error } = await supabase.rpc('record_swipe_event', {
+    p_tmdb_movie_id: movie.tmdbId,
+    p_action: action,
+    p_movie_title: movie.title || undefined,
+    p_movie_year: movie.year || undefined,
+    p_movie_director: movie.director || undefined,
+    p_movie_genre: movie.genre || undefined,
+    p_poster_url: movie.posterUrl || undefined,
+    p_movie_synopsis: movie.synopsis || undefined,
+    p_recommendation_reason: movie.recommendationReason || undefined,
+    p_source: movie.source || undefined,
+  });
 
-    const { data: states, error: statesError } = await supabase
-      .from('swipe_states')
-      .select('tmdb_movie_id')
-      .eq('user_id', user.id);
-
-    if (statesError) {
-      logger.warn('SWIPE_STATE_FETCH_FAILED', { error: statesError.message });
-    }
-
-    const historyIds = (states ?? []).map((row) => row.tmdb_movie_id);
-    const excludedSet = new Set<number>([
-      ...visibleTmdbIds.filter((id) => Number.isInteger(id) && id > 0),
-      ...historyIds.filter((id) => Number.isInteger(id) && id > 0),
-    ]);
-
-    const randomPage = Math.floor(Math.random() * 8) + 1;
-
-    const discoverRes = await fetch(
-      `https://api.themoviedb.org/3/discover/movie` +
-        `?api_key=${apiKey}` +
-        `&include_adult=false` +
-        `&include_video=false` +
-        `&language=en-US` +
-        `&page=${randomPage}` +
-        `&sort_by=popularity.desc` +
-        `&vote_count.gte=1000` +
-        `&vote_average.gte=6.0` +
-        `&with_original_language=en`
-    );
-
-    if (!discoverRes.ok) {
-      logger.error('TMDB_DISCOVER_FAILED', { status: discoverRes.status });
-      return [];
-    }
-
-    const discoverData = await discoverRes.json();
-    const results: Array<{ id: number }> = discoverData.results || [];
-    const filtered = results.filter((movie) => !excludedSet.has(movie.id));
-    const selected = filtered.slice(0, MOVIES_PER_BATCH);
-
-    const moviePromises = selected.map(async (movie) => {
-      try {
-        const detailRes = await fetch(
-          `https://api.themoviedb.org/3/movie/${movie.id}` +
-            `?api_key=${apiKey}&append_to_response=credits`
-        );
-        if (!detailRes.ok) return null;
-
-        const detail = await detailRes.json();
-
-        const director =
-          (detail.credits?.crew ?? []).find((c: { job: string; name: string }) => c.job === 'Director')
-            ?.name ?? 'Unknown Director';
-
-        const genre =
-          (detail.genres ?? []).map((g: { name: string }) => g.name).join(', ') ||
-          'Unknown Genre';
-
-        const year = detail.release_date
-          ? parseInt(detail.release_date.split('-')[0], 10)
-          : 0;
-
-        const posterUrl = detail.poster_path
-          ? `https://image.tmdb.org/t/p/w500${detail.poster_path}`
-          : undefined;
-
-        const candidate: MovieCandidate = {
-          tmdbId: Number(detail.id),
-          title: detail.title as string,
-          year,
-          director,
-          genre,
-          synopsis: detail.overview as string,
-          posterUrl,
-        };
-        return candidate;
-      } catch {
-        return null;
-      }
-    });
-
-    const resolved = await Promise.all(moviePromises);
-    return resolved.filter(Boolean) as MovieCandidate[];
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Rate limit')) {
-      throw error;
-    }
-    logger.error('FETCH_MOVIES_UNEXPECTED', { error: String(error) });
-    return [];
+  if (error) {
+    logger.warn('SAVE_SWIPE_RPC_FAILED', { error: error.message });
+    throw new Error('Failed to save your swipe. Please try again.');
   }
 }
 
@@ -209,14 +84,6 @@ export async function fetchMovies(visibleTmdbIds: number[] = []): Promise<MovieC
 export async function getMovieRecommendation(
   swipedMovies: SwipedMovie[]
 ): Promise<Recommendation | null> {
-  const ip = await getClientIp();
-  const rateCheck = await checkRateLimit(ip, 'getMovieRecommendation');
-  if (!rateCheck.allowed) {
-    throw new Error(
-      `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
-    );
-  }
-
   const supabase = await createClient();
   const {
     data: { user },
@@ -225,6 +92,14 @@ export async function getMovieRecommendation(
 
   if (authError || !user) {
     throw new Error('Unauthorized');
+  }
+
+  const ip = await getClientIp();
+  const rateCheck = await checkRateLimit(ip, 'getMovieRecommendation', user.id);
+  if (!rateCheck.allowed) {
+    throw new Error(
+      `Rate limit exceeded. Please try again in ${rateCheck.retryAfter} seconds.`
+    );
   }
 
   try {

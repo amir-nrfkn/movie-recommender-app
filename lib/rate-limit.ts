@@ -26,8 +26,9 @@ export interface RateLimitResult {
  * Add new actions here as needed.
  */
 const ACTION_LIMITS: Record<string, RateLimitConfig> = {
-    fetchMovies: { maxRequests: 30, windowMs: 60_000 },
     getMovieRecommendation: { maxRequests: 10, windowMs: 60_000 },
+    getQueuedMovies: { maxRequests: 30, windowMs: 60_000 },
+    refillQueuedMovies: { maxRequests: 10, windowMs: 60_000 },
 };
 
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -41,14 +42,20 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * @returns An object indicating whether the request is allowed, and
  *          how many seconds until the client can retry if not.
  */
-export async function checkRateLimit(ip: string, action: string): Promise<RateLimitResult> {
+export async function checkRateLimit(
+    ip: string,
+    action: string,
+    userId?: string
+): Promise<RateLimitResult> {
     const config = ACTION_LIMITS[action];
     if (!config) {
         // Unknown action — allow by default (fail-open for unconfigured actions)
         return { allowed: true };
     }
 
-    const key = `${ip}:${action}`;
+    // When authenticated, key by user so a shared NAT IP can't exhaust one user's
+    // budget (and vice versa). Anonymous callers fall back to IP-only.
+    const key = userId ? `user:${userId}:${action}` : `ip:${ip}:${action}`;
     const supabase = createAdminClient();
     if (!supabase) {
         console.warn('[RateLimit] Missing Supabase environment variables. Bypassing rate limit.');

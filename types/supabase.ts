@@ -318,6 +318,13 @@ export type Database = {
         }
         Returns: Json
       }
+      enqueue_user_movies: {
+        Args: {
+          p_user_id: string
+          p_movies: Json
+        }
+        Returns: number
+      }
       record_swipe_event: {
         Args: {
           p_tmdb_movie_id: number

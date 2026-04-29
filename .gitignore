@@ -8,3 +8,5 @@ coverage/
 .agents/
 .bruin.yml
 agent/
+plan/
+supabase/

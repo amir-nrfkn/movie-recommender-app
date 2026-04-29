@@ -16,6 +16,7 @@ export async function GET(request: Request) {
   if (!code) {
     const errorUrl = new URL('/login', requestUrl.origin)
     errorUrl.searchParams.set('error', 'missing_code')
+    if (next !== '/') errorUrl.searchParams.set('next', next)
     return NextResponse.redirect(errorUrl)
   }
 
@@ -25,6 +26,7 @@ export async function GET(request: Request) {
   if (error) {
     const errorUrl = new URL('/login', requestUrl.origin)
     errorUrl.searchParams.set('error', 'oauth_callback_failed')
+    if (next !== '/') errorUrl.searchParams.set('next', next)
     return NextResponse.redirect(errorUrl)
   }
 

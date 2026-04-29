@@ -8,6 +8,16 @@ import { Loader2, Film } from 'lucide-react';
 import { login } from '@/actions/auth';
 import { createClient } from '@/lib/supabase/client';
 
+function getSafeNext(next: string | null): string {
+  if (!next || !next.startsWith('/') || next.startsWith('//')) return '/';
+  return next;
+}
+
+function readNextFromLocation(): string {
+  if (typeof window === 'undefined') return '/';
+  return getSafeNext(new URLSearchParams(window.location.search).get('next'));
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +38,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push('/');
+    router.push(readNextFromLocation());
     router.refresh();
   };
 
@@ -36,7 +46,8 @@ export default function LoginPage() {
     setError(null);
     setIsGoogleLoading(true);
     const supabase = createClient();
-    const redirectTo = `${window.location.origin}/auth/callback?next=/`;
+    const next = readNextFromLocation();
+    const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`;
     const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {

@@ -47,6 +47,23 @@ export async function setWatchlistItem(
   }
 
   if (shouldBeInWatchlist) {
+    // Preserve any recommendation context already stored on the row when the
+    // caller re-adds with a sparse MovieDetail (e.g. toggled from a view that
+    // doesn't carry the original reason / source).
+    const { data: existing } = await supabase
+      .from('watchlists')
+      .select('recommendation_reason, source, recommended_at')
+      .eq('user_id', user.id)
+      .eq('tmdb_movie_id', movie.tmdbId)
+      .maybeSingle();
+
+    const recommendationReason =
+      movie.recommendationReason ?? existing?.recommendation_reason ?? null;
+    const source = movie.source ?? existing?.source ?? 'manual';
+    const recommendedAt =
+      existing?.recommended_at ??
+      (movie.recommendationReason ? new Date().toISOString() : null);
+
     const { error } = await supabase.from('watchlists').upsert(
       {
         user_id: user.id,
@@ -57,9 +74,9 @@ export async function setWatchlistItem(
         movie_genre: movie.genre ?? null,
         movie_synopsis: movie.synopsis ?? null,
         poster_url: movie.posterUrl ?? null,
-        recommendation_reason: movie.recommendationReason ?? null,
-        source: movie.source ?? 'manual',
-        recommended_at: movie.recommendationReason ? new Date().toISOString() : null,
+        recommendation_reason: recommendationReason,
+        source,
+        recommended_at: recommendedAt,
       },
       { onConflict: 'user_id,tmdb_movie_id' }
     );
